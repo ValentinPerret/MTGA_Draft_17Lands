@@ -19,6 +19,7 @@ class DraftOrchestrator(threading.Thread):
         self.new_event_detected = False
 
         self._stop_event = threading.Event()
+        self._paused_event = threading.Event()
         self._force_math_event = threading.Event()
         self._force_full_scan_event = threading.Event()
 
@@ -92,12 +93,32 @@ class DraftOrchestrator(threading.Thread):
     def stop(self):
         self._stop_event.set()
 
+    @property
+    def monitoring_paused(self):
+        return self._paused_event.is_set()
+
+    def set_paused(self, paused: bool):
+        if paused:
+            self._paused_event.set()
+            self.update_queue.put({"status": "Monitoring paused"})
+        else:
+            self._paused_event.clear()
+            self._last_file_size = -1
+            self.update_queue.put({"status": "Monitoring resumed"})
+        return self.monitoring_paused
+
+    def toggle_paused(self):
+        return self.set_paused(not self.monitoring_paused)
+
     def request_math_update(self):
         self._force_math_event.set()
 
     def run(self):
         logger.info("Background Watchdog started.")
         while not self._stop_event.is_set():
+            if self.monitoring_paused:
+                time.sleep(0.5)
+                continue
             # Automatically snap back to the live draft log ONLY if a draft event is detected
             if getattr(self, "live_log_path", None) and os.path.exists(
                 self.live_log_path
@@ -171,7 +192,7 @@ class DraftOrchestrator(threading.Thread):
         return False
 
     def step_process(self):
-        if not self.loading:
+        if not self.loading and not self.monitoring_paused:
             try:
                 # Check our flag safely on the background thread
                 force = self._force_full_scan_event.is_set()

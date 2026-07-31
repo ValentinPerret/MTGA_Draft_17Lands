@@ -80,6 +80,11 @@ def test_orchestrator_flags(orchestrator):
     orchestrator.request_math_update()
     assert orchestrator._force_math_event.is_set()
 
+    assert orchestrator.monitoring_paused is False
+    assert orchestrator.toggle_paused() is True
+    assert orchestrator.monitoring_paused is True
+    assert orchestrator.toggle_paused() is False
+
 
 @patch("src.ui.orchestrator.time.sleep", return_value=None)
 def test_orchestrator_run_loop(mock_sleep, orchestrator):

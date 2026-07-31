@@ -117,6 +117,20 @@ class ArenaScanner:
                 if os.path.basename(filename).startswith("DraftLog_"):
                     self.log_enable(False)
 
+    def detailed_logs_enabled(self):
+        """Return Arena's explicit detailed-log status, or ``None`` if unknown."""
+        try:
+            with open(self.arena_file, "r", encoding="utf-8", errors="replace") as log:
+                # Arena writes this setting near startup; bounding the read avoids
+                # rescanning a multi-megabyte active log on every UI refresh.
+                header = log.read(262_144).upper()
+            markers = re.findall(r"DETAILED LOGS\s*:\s*(ENABLED|DISABLED)", header)
+            if not markers:
+                return None
+            return markers[-1] == "ENABLED"
+        except (OSError, TypeError):
+            return None
+
     def log_enable(self, enable):
         """Enable/disable the application draft log feature"""
         with self.lock:
@@ -340,6 +354,44 @@ class ArenaScanner:
                                 self.draft_start_offset = offset
                                 self.draft_start_time = self._last_seen_timestamp
 
+                    elif "Client.SceneChange" in line and '"context"' in line:
+                        # Current Arena builds can enter a human draft without an
+                        # Event_Join payload. The scene context still exposes the
+                        # read-only event name (for example
+                        # CubeDraft_Planar_Innistrad), which is enough to select the
+                        # correct parser and latest-event dataset.
+                        try:
+                            json_start = line.find("{")
+                            if json_start != -1:
+                                scene_data = process_json(line[json_start:])
+                                context = json_find("context", scene_data)
+                                target_scene = str(
+                                    json_find("toSceneName", scene_data) or ""
+                                ).lower()
+                                context_text = str(context or "")
+                                if (
+                                    context
+                                    and "draft" in context_text.lower()
+                                    and ("_" in context_text or ":" in context_text)
+                                    and target_scene in {"tabledraftqueue", "draft"}
+                                ):
+                                    event_name = str(context)
+                                    if ":" in event_name:
+                                        event_name = event_name.split(":", 1)[-1].strip()
+                                    is_new, et, did = self.__check_event(
+                                        {"EventName": event_name}
+                                    )
+                                    if is_new:
+                                        update = True
+                                        event_type = et
+                                        draft_id = did
+                                        event_line = line
+                                        with self.lock:
+                                            self.draft_start_offset = offset
+                                            self.draft_start_time = self._last_seen_timestamp
+                        except Exception as e:
+                            logger.error(f"Error parsing draft scene context: {e}")
+
                     elif "InternalEventName" in line and "CardPool" in line:
                         try:
                             json_start = line.find("{")
@@ -467,11 +519,27 @@ class ArenaScanner:
 
         if events:
             upper_sections = [sec.upper() for sec in event_sections]
-            for i in sorted(
-                self.set_list.data.values(), key=lambda v: len(v.set_code), reverse=True
+            for set_name, i in sorted(
+                self.set_list.data.items(),
+                key=lambda item: len(item[1].set_code),
+                reverse=True,
             ):
                 if not i.set_code:
                     continue
+                event_normalized = re.sub(r"[^A-Z0-9]", "", event_name.upper())
+                candidate_words = re.findall(r"[A-Z0-9]+", set_name.upper())
+                meaningful_words = [
+                    word
+                    for word in candidate_words
+                    if word not in {"DRAFT", "PREMIER", "TRADITIONAL"}
+                ]
+                if (
+                    "CUBE" in set_name.upper()
+                    and len(meaningful_words) >= 2
+                    and all(word in event_normalized for word in meaningful_words)
+                ):
+                    event_set = [i.set_code]
+                    break
                 normalized_code = i.set_code.replace("-", " ").replace("CUBE", " CUBE ")
                 code_parts = normalized_code.split()
                 if all(

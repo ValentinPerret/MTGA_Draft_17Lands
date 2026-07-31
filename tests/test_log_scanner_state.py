@@ -89,3 +89,65 @@ def test_stale_pool_no_wipe_historical_replay(scanner):
 
     # Pool should NOT be wiped
     assert len(scanner.taken_cards) == 20
+
+
+def test_detailed_log_status_detection(tmp_path):
+    log = tmp_path / "Player.log"
+    log.write_text("Boot\nDETAILED LOGS: DISABLED\n")
+    scanner = ArenaScanner(str(log), MagicMock(), retrieve_unknown=False)
+    assert scanner.detailed_logs_enabled() is False
+
+    log.write_text("Boot\nDETAILED LOGS: ENABLED\n")
+    assert scanner.detailed_logs_enabled() is True
+
+
+def test_scene_change_detects_current_planar_cube_module(tmp_path):
+    from src.limited_sets import SetDictionary, SetInfo
+
+    log = tmp_path / "Player.log"
+    log.write_text(
+        '[UnityCrossThreadLogger]Client.SceneChange '
+        '{"fromSceneName":"EventLanding","toSceneName":"TableDraftQueue",'
+        '"context":"CubeDraft_Planar_Innistrad"}\n'
+    )
+    sets = SetDictionary(
+        data={
+            "Cube Planar Innistrad": SetInfo(
+                arena=["CubeDraft_Planar_Innistrad"],
+                seventeenlands=["Cube - Planar"],
+                set_code="CUBEPLANARINNISTRAD",
+            )
+        }
+    )
+    scanner = ArenaScanner(str(log), sets, retrieve_unknown=False)
+    scanner.state_file = str(tmp_path / "state.json")
+    scanner.clear_draft(True)
+
+    assert scanner.draft_start_search() is True
+    assert scanner.retrieve_current_limited_event() == (
+        "CUBEPLANARINNISTRAD",
+        "PremierDraft",
+    )
+    assert scanner.event_string == "CubeDraft_Planar_Innistrad"
+
+
+def test_sanitized_current_innistrad_cube_replay(tmp_path):
+    from pathlib import Path
+    from src.limited_sets import SetDictionary, SetInfo
+
+    fixture = Path(__file__).parent / "data" / "innistrad_planar_cube_disabled_detailed_logs.log"
+    sets = SetDictionary(
+        data={
+            "Cube Planar Innistrad": SetInfo(set_code="CUBEPLANARINNISTRAD")
+        }
+    )
+    scanner = ArenaScanner(str(fixture), sets, retrieve_unknown=False)
+    scanner.state_file = str(tmp_path / "state.json")
+    scanner.clear_draft(True)
+
+    assert scanner.draft_start_search() is True
+    assert scanner.draft_data_search() is True
+    assert scanner.retrieve_current_pack_and_pick() == (3, 15)
+    assert len(scanner.retrieve_draft_history()) == 2
+    assert scanner.taken_cards == []
+    assert scanner.detailed_logs_enabled() is False
