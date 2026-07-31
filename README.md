@@ -2,6 +2,13 @@
 
 Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 
+**Data attribution:** Card-performance statistics are derived from
+[17Lands](https://www.17lands.com/). Please review its
+[usage guidelines](https://www.17lands.com/usage_guidelines),
+[terms](https://www.17lands.com/terms_of_service), and
+[public-dataset licensing](https://api.17lands.com/public_datasets) before
+redistributing data or operating a bulk-data workflow.
+
 **This application will automatically support new sets as soon as the sets are released on Arena _and_ the data is available on the [17Lands card ratings](https://www.17lands.com/card_ratings) page.**
 
 **Supported Events:** Premier Draft, Traditional Draft, Quick Draft, Sealed, Traditional Sealed, and Cube.
@@ -12,6 +19,7 @@ Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 - [Run Steps: Standalone App (Windows / macOS / Linux)](#run-steps-standalone-app-windows--macos--linux)
 - [Run Steps: Python (Windows / macOS / Linux)](#run-steps-python-windows--macos--linux)
 - [Marquee Features](#marquee-features)
+- [Contextual Draft Copilot](#contextual-draft-copilot)
 - [UI Navigation & Tabs](#ui-navigation--tabs)
 - [Settings & Preferences](#settings--preferences)
 - [File Locations](#file-locations)
@@ -85,6 +93,43 @@ macOS actively quarantines unsigned apps downloaded from the internet. To run th
 
 ---
 
+## Contextual Draft Copilot
+
+This fork includes a feature-flagged `contextual_v2` advisor alongside the original
+legacy advisor. It evaluates every card through bounded candidate-deck searches and
+accounts for adjusted 17Lands statistics, lane probabilities, marginal replacement,
+mana, curve, interaction, signals, uncertainty, and declarative synergy packages.
+Innistrad Planar Cube includes explicit roles for Humans, Zombies, Madness,
+Reanimator, Spider Spawning, Spells, Sacrifice, and Vampires.
+
+The live recommendation shows the suggested pick, alternatives, confidence, likely
+lanes, expected final-deck inclusion, replacement card, score components, data
+caveats, and useful future picks. It remains read-only and never clicks or controls
+Arena. The original advisor is always available through Preferences or the `V1`/`V2`
+Mini Mode control.
+
+An optional **local Codex review** can selectively review close or complex decisions
+on this Mac. It invokes the locally installed Codex runtime with the existing ChatGPT
+sign-in; the application does not read, copy, store, or print the credentials. Each
+review is ephemeral, read-only, tool-disabled, schema-validated, cached, and performed
+off the UI thread. Only minimized draft state is sent—never `Player.log`, account
+identifiers, machine paths, or unrelated history. The deterministic recommendation
+always appears first and remains the fallback.
+
+To use it:
+
+1. Enable **Detailed Logs (Plugin Support)** in Arena and restart Arena.
+2. Open **File -> Preferences**, select `contextual_v2`, and optionally enable
+   **Local Codex Review**.
+3. Confirm the ChatGPT desktop app's bundled Codex is signed in (`codex login status`
+   is an optional terminal check).
+4. Use the Mini Mode `AI` button or **Analyze Deeper with Codex** for a manual pass.
+
+See [Contextual Draft Copilot architecture](docs/contextual-draft-copilot.md) for
+privacy, routing, testing, limitations, and troubleshooting details.
+
+---
+
 ## UI Navigation & Tabs
 
 The application is structured into a collapsible Live Dashboard and several functional workspace tabs:
@@ -111,6 +156,9 @@ Access Settings via `File -> Preferences...`
 - **Win Rate Format:** Switch the results for win rate fields (GIHWR, OHWR) between a Percentage (55.0%), a 5-point Rating scale, or Grades (A+ to F).
 - **Deck Filter Format:** Switch the Deck Filter dropdown to display either color permutations (e.g., UB, BG) or guild/shard names (e.g., Dimir, Golgari).
 - **UI Scale:** Increase or decrease the application text and image sizes globally (from 40% up to 250%). Perfect for smaller laptop displays or massive 4k monitors.
+- **Advisor Engine:** Switch instantly between `legacy` and `contextual_v2`.
+- **Enable Local Codex Review:** Opt in to selective, cached second-pass reviews using the locally authenticated Codex installation. Leave the model override blank to use Codex's recommended default.
+- **Automatic Reviews / Draft:** Limit automatic Codex reviews; the default is 10 and clear local decisions are skipped.
 - **Highlight Row by Mana Cost:** Colors the background of table rows based on the card's color identity.
 - **Auto-Switch Deck Filter to Best Colors:** When the filter is set to "Auto", the app tracks your picks and will automatically switch to displaying data for your confirmed color pair once your lane is identified.
 - **Enable Draft Log Creation:** Records the draft step-by-step in a readable log file within the `./Logs` folder.
@@ -168,6 +216,20 @@ If the log file ever severely desyncs, click the **Reload** button in the main d
 ### Arena Log Issues
 If the application cannot detect an active event, click `File -> Read Player.log` and ensure the proper file is selected.
 
+If the overlay reports that detailed logs are disabled, open **Arena -> Options ->
+Account**, enable **Detailed Logs (Plugin Support)**, restart Arena, and then use
+**Resync from Player.log**. Pack contents may still appear while detailed logs are
+off, but the picked pool cannot be reconstructed reliably.
+
+### Local Codex Review
+
+Codex review is optional. If it is unavailable or times out, the deterministic local
+ranking stays visible. On this macOS setup, the app first looks for the Codex runtime
+bundled with `/Applications/ChatGPT.app`, then falls back to `codex` on `PATH`.
+Sign in to Codex through ChatGPT; do not place subscription credentials in this repo.
+The feature consumes the ChatGPT account's Codex allowance and is not a substitute
+for a supported general-purpose API backend in redistributed builds.
+
 ### Custom Installation Folders
 If MTG Arena is installed in a non-standard directory (e.g., a secondary Steam library drive), the application might fail to automatically locate the local MTGA card database, causing dataset downloads to fail. To fix this, click `File -> Locate MTGA Data Folder...` in the top menu bar and select your custom `MTGA_Data` folder.
 
@@ -183,6 +245,8 @@ For developers looking to contribute, fork, or understand the architecture of th
 - `03-business-logic.md`
 - `04-external-integrations.md`
 - `05-server-etl-pipeline.md`
+- `contextual-draft-copilot.md`
+- `contextual-draft-copilot-baseline.md`
 
 ### Environment Setup
 
@@ -204,6 +268,12 @@ poetry run pytest tests/
 To run tests with coverage reporting:
 ```bash
 poetry run pytest tests/ --cov=src
+```
+
+To benchmark the contextual hot path without making a Codex call:
+
+```bash
+poetry run python Tools/benchmark_contextual_copilot.py
 ```
 
 ### Automated Releases & Version Management

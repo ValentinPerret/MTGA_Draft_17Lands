@@ -75,4 +75,3 @@ document that direct API access is unsupported and may change.
 4. Route the controller and existing overlay through the service; keep legacy as
    the default until a detailed-log live replay succeeds.
 5. Add behavioral/golden tests and a full-pack latency benchmark before packaging.
-
