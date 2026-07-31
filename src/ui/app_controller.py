@@ -13,7 +13,7 @@ from typing import Dict
 
 from src import constants
 from src.configuration import write_configuration
-from src.advisor.engine import DraftAdvisor
+from src.advisor.service import AdvisorService
 from src.signals import SignalCalculator
 from src.card_logic import filter_options, get_deck_metrics
 from src.app_update import AppUpdate
@@ -222,7 +222,14 @@ class AppController:
                 scores[c] += v
 
         # Pass signals securely into Advisor
-        advisor = DraftAdvisor(metrics, taken_cards, signals=scores)
+        advisor = AdvisorService(
+            metrics,
+            taken_cards,
+            signals=scores,
+            configuration=self.config,
+            event_name=event_string,
+            draft_history=history,
+        )
         recommendations = advisor.evaluate_pack(pack_cards, pi, current_pack=pk)
 
         # UPDATE UI STATE

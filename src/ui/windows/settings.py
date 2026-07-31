@@ -100,8 +100,22 @@ class SettingsWindow(tkinter.Toplevel):
         )
         size_om.grid(row=3, column=1, sticky="ew", pady=Theme.scaled_val(2))
 
+        ttk.Label(container, text="Advisor Engine:").grid(
+            row=4, column=0, sticky="e", padx=Theme.scaled_val(5)
+        )
+        self.vars["advisor_engine"] = tkinter.StringVar()
+        engine_om = ttk.OptionMenu(
+            container,
+            self.vars["advisor_engine"],
+            "",
+            "legacy",
+            "contextual_v2",
+            style="TMenubutton",
+        )
+        engine_om.grid(row=4, column=1, sticky="ew", pady=Theme.scaled_val(2))
+
         # --- SECTION: ADVISOR & HUD ---
-        r = 4
+        r = 5
         ttk.Label(
             container, text="INTELLIGENCE & HUD", font=Theme.scaled_font(9, "bold")
         ).grid(
@@ -179,6 +193,7 @@ class SettingsWindow(tkinter.Toplevel):
         self.vars["result_format"].set(s.result_format)
         self.vars["filter_format"].set(s.filter_format)
         self.vars["ui_size"].set(self.original_ui_size)
+        self.vars["advisor_engine"].set(s.advisor_engine)
 
         # Paths
         self.vars["arena_log_location"].set(s.arena_log_location)

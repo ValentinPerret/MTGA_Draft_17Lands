@@ -37,6 +37,7 @@ class TestSettingsWindow:
         assert window.vars["result_format"].get() == constants.RESULT_FORMAT_WIN_RATE
         assert window.vars["filter_format"].get() == constants.DECK_FILTER_FORMAT_COLORS
         assert window.vars["ui_size"].get() == constants.UI_SIZE_DEFAULT
+        assert window.vars["advisor_engine"].get() == "legacy"
 
         # Check integer conversion for booleans (True -> 1)
         assert window.vars["draft_log_enabled"].get() == 1  # Default is True
