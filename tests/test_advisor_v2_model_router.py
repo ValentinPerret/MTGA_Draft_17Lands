@@ -3,7 +3,7 @@ from src.configuration import ModelAssistance
 
 
 def enabled_config():
-    return ModelAssistance(enabled=True, model="configured-model")
+    return ModelAssistance(enabled=True)
 
 
 def test_router_skips_decisive_or_late_reviews():
@@ -22,8 +22,7 @@ def test_router_requests_close_or_manual_review():
     ).should_call
 
 
-def test_router_never_calls_without_explicit_model():
+def test_router_uses_codex_default_without_explicit_model():
     router = ModelReviewRouter(ModelAssistance(enabled=True, model=""))
     decision = router.decide(score_margin=1.0, confidence=0.2)
-    assert not decision.should_call
-    assert "model" in decision.reason.lower()
+    assert decision.should_call

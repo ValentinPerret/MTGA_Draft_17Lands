@@ -194,20 +194,26 @@ class CardData(BaseModel):
 class ModelAssistance(BaseModel):
     """Optional second-pass reviewer configuration.
 
-    The deterministic advisor never depends on this feature. A blank model keeps
-    assistance unavailable until the user configures an API model explicitly.
+    The deterministic advisor never depends on this feature. The ``codex``
+    provider delegates to an already-authenticated local Codex installation; a
+    blank model lets Codex select its current recommended default.
     """
 
     enabled: bool = False
-    provider: str = "openai"
+    provider: str = "codex"
     model: str = ""
     automatic_call_limit_per_draft: int = Field(default=10, ge=0, le=50)
     close_score_margin: float = Field(default=4.0, ge=0.0)
     skip_score_margin: float = Field(default=8.0, ge=0.0)
     skip_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     minimum_remaining_pick_seconds: int = Field(default=20, ge=0)
-    request_timeout_seconds: float = Field(default=6.0, gt=0.0, le=30.0)
+    request_timeout_seconds: float = Field(default=12.0, gt=0.0, le=30.0)
     allow_manual_analysis: bool = True
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value):
+        return "codex" if str(value).strip().lower() == "codex" else "codex"
 
 
 class Configuration(BaseModel):

@@ -60,7 +60,13 @@ class ContextualDraftAdvisor:
         self._stats_cache = {}
 
     def evaluate_pack(
-        self, pack_cards: List[Dict], current_pick: int, current_pack: int = 1
+        self,
+        pack_cards: List[Dict],
+        current_pick: int,
+        current_pack: int = 1,
+        *,
+        manual_model_review: bool = False,
+        state_complete: bool = True,
     ) -> List[Recommendation]:
         if not pack_cards:
             return []
@@ -141,7 +147,8 @@ class ContextualDraftAdvisor:
             self.last_model_decision = self.model_router.decide(
                 score_margin=margin,
                 confidence=provisional[0].confidence,
-                state_complete=bool(pack_cards),
+                state_complete=bool(pack_cards) and state_complete,
+                manual=manual_model_review,
             )
         return provisional
 

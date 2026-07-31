@@ -31,6 +31,7 @@ class AdvisorService:
         self.configuration = configuration
         self.event_name = event_name
         self.draft_history = draft_history or []
+        self.last_model_decision = None
 
     @property
     def engine_name(self) -> str:
@@ -40,7 +41,13 @@ class AdvisorService:
             return "legacy"
 
     def evaluate_pack(
-        self, pack_cards: List[Dict], current_pick: int, current_pack: int = 1
+        self,
+        pack_cards: List[Dict],
+        current_pick: int,
+        current_pack: int = 1,
+        *,
+        manual_model_review: bool = False,
+        state_complete: bool = True,
     ) -> List[Recommendation]:
         if self.engine_name == "contextual_v2":
             from src.advisor_v2.service import ContextualDraftAdvisor
@@ -55,6 +62,17 @@ class AdvisorService:
             )
         else:
             advisor = DraftAdvisor(self.metrics, self.pool, signals=self.signals)
+
+        if self.engine_name == "contextual_v2":
+            recommendations = advisor.evaluate_pack(
+                pack_cards,
+                current_pick=current_pick,
+                current_pack=current_pack,
+                manual_model_review=manual_model_review,
+                state_complete=state_complete,
+            )
+            self.last_model_decision = advisor.last_model_decision
+            return recommendations
 
         return advisor.evaluate_pack(
             pack_cards, current_pick=current_pick, current_pack=current_pack

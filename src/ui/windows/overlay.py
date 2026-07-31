@@ -4,6 +4,8 @@ Compact Mini Mode Window for in-game drafting.
 """
 
 import tkinter
+import os
+import time
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from src import constants
@@ -119,6 +121,26 @@ class CompactOverlay(tb.Toplevel):
             header, text="⚙", bootstyle="link", command=self._show_settings_menu
         )
         self.btn_settings.pack(side=RIGHT, padx=Theme.scaled_val(2))
+
+        self.btn_refresh = tb.Button(
+            header, text="↻", bootstyle="link", command=self._manual_resync
+        )
+        self.btn_refresh.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_analyze = tb.Button(
+            header, text="AI", bootstyle="link", command=self._analyze_deeper
+        )
+        self.btn_analyze.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_engine = tb.Button(
+            header,
+            text="V2" if self.configuration.settings.advisor_engine == "contextual_v2" else "V1",
+            bootstyle="link",
+            command=self._toggle_engine,
+        )
+        self.btn_engine.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_pause = tb.Button(
+            header, text="⏸", bootstyle="link", command=self._toggle_monitoring
+        )
+        self.btn_pause.pack(side=RIGHT, padx=Theme.scaled_val(1))
 
         self.lbl_status = tb.Label(
             header,
@@ -301,6 +323,25 @@ class CompactOverlay(tb.Toplevel):
                 )
         menu.add_cascade(label="User Group", menu=group_menu)
         menu.add_separator()
+        pause_label = (
+            "Resume Monitoring"
+            if getattr(self.orchestrator, "monitoring_paused", False)
+            else "Pause Monitoring"
+        )
+        menu.add_command(label=pause_label, command=self._toggle_monitoring)
+        engine_label = (
+            "Use Legacy Advisor"
+            if self.configuration.settings.advisor_engine == "contextual_v2"
+            else "Use Contextual Advisor"
+        )
+        menu.add_command(label=engine_label, command=self._toggle_engine)
+        menu.add_command(label="Resync from Player.log", command=self._manual_resync)
+        if self.configuration.model_assistance.enabled:
+            menu.add_command(label="Analyze Deeper with Codex", command=self._analyze_deeper)
+            menu.add_command(
+                label="Disable Codex Review", command=self._disable_model_assistance
+            )
+        menu.add_separator()
         menu.add_command(
             label="Preferences...", command=self.app_context._open_settings
         )
@@ -309,6 +350,42 @@ class CompactOverlay(tb.Toplevel):
             self.btn_settings.winfo_rootx(),
             self.btn_settings.winfo_rooty() + self.btn_settings.winfo_height(),
         )
+
+    def _toggle_monitoring(self):
+        paused = self.orchestrator.toggle_paused()
+        self.btn_pause.configure(text="▶" if paused else "⏸")
+        self.lbl_status.configure(text="PAUSED" if paused else "Resuming…")
+
+    def _toggle_engine(self):
+        current = self.configuration.settings.advisor_engine
+        self.configuration.settings.advisor_engine = (
+            "legacy" if current == "contextual_v2" else "contextual_v2"
+        )
+        write_configuration(self.configuration)
+        self.btn_engine.configure(
+            text="V2"
+            if self.configuration.settings.advisor_engine == "contextual_v2"
+            else "V1"
+        )
+        self.orchestrator.request_math_update()
+
+    def _disable_model_assistance(self):
+        self.configuration.model_assistance.enabled = False
+        write_configuration(self.configuration)
+        self.orchestrator.request_math_update()
+
+    def _analyze_deeper(self):
+        if hasattr(self.app_context, "controller"):
+            self.app_context.controller.request_deeper_analysis()
+
+    def _manual_resync(self):
+        if getattr(self.orchestrator, "monitoring_paused", False):
+            self.orchestrator.set_paused(False)
+            self.btn_pause.configure(text="⏸")
+        if hasattr(self.app_context, "controller"):
+            self.app_context.controller.force_reload()
+        else:
+            self.orchestrator.trigger_full_scan()
 
     def _trigger_refresh(self):
         if hasattr(self.orchestrator, "refresh_callback"):
@@ -365,7 +442,18 @@ class CompactOverlay(tb.Toplevel):
         self.current_missing_cards = missing_cards
 
         pk, pi = self.orchestrator.scanner.retrieve_current_pack_and_pick()
-        self.lbl_status.config(text=f"P{pk} / P{pi}")
+        status_text = f"P{pk} / P{pi}"
+        status_style = "inverse-secondary"
+        try:
+            age = time.time() - os.path.getmtime(self.orchestrator.scanner.arena_file)
+            incomplete = bool(pk and pi > 1 and not taken_cards)
+            if getattr(self.orchestrator, "monitoring_paused", False):
+                status_text, status_style = "PAUSED", "warning"
+            elif age > 60 or incomplete:
+                status_text, status_style = f"STALE · P{pk}/{pi}", "warning"
+        except Exception:
+            pass
+        self.lbl_status.config(text=status_text, bootstyle=status_style)
 
         self.advisor_panel.update_recommendations(recommendations)
         self.signal_meter.update_values(scores if scores is not None else {})

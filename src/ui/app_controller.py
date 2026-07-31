@@ -14,6 +14,11 @@ from typing import Dict
 from src import constants
 from src.configuration import write_configuration
 from src.advisor.service import AdvisorService
+from src.advisor_v2.codex_reviewer import (
+    CodexReviewCoordinator,
+    apply_codex_review,
+    build_review_request,
+)
 from src.signals import SignalCalculator
 from src.card_logic import filter_options, get_deck_metrics
 from src.app_update import AppUpdate
@@ -31,6 +36,8 @@ class AppController:
         self.orchestrator = app_context.orchestrator
         self.previous_timestamp = 0
         self._update_task_id = None
+        self._manual_model_review_requested = False
+        self.codex_reviews = CodexReviewCoordinator(self.config.model_assistance)
 
     def start_boot_sync(self):
         """Phase 1: Immediate synchronization of critical UI components."""
@@ -120,6 +127,11 @@ class AppController:
                 except queue.Empty:
                     break
 
+            # Worker threads only signal through a queue. Tk calls and UI refreshes
+            # always remain on this main loop.
+            if self.codex_reviews.poll_completed():
+                update_detected = True
+
             if update_detected:
                 self.app.top_bar.set_history_dropdown_state("readonly")
                 self.app.top_bar.update_data_sources()
@@ -161,6 +173,22 @@ class AppController:
                 self.orchestrator.scanner.set_data.unknown_id_cache.clear()
 
         self.orchestrator.trigger_full_scan()
+
+    def request_deeper_analysis(self):
+        """Request one user-initiated Codex pass on the current pick."""
+        if self.config.settings.advisor_engine != "contextual_v2":
+            self.app.vars["status_text"].set(
+                "Select the contextual advisor before requesting Codex review."
+            )
+            return
+        if not self.config.model_assistance.enabled:
+            self.app.vars["status_text"].set(
+                "Enable optional Codex review in Preferences first."
+            )
+            return
+        self._manual_model_review_requested = True
+        self.app.vars["status_text"].set("Codex review requested…")
+        self.refresh_ui_data()
 
     def on_dataset_update(self):
         latest_file = self.config.card_data.latest_dataset
@@ -221,6 +249,14 @@ class AppController:
             for c, v in sig_calc.calculate_pack_signals(h_pack, entry["Pick"]).items():
                 scores[c] += v
 
+        try:
+            detailed_logs = self.orchestrator.scanner.detailed_logs_enabled()
+        except Exception:
+            detailed_logs = None
+
+        manual_model_review = self._manual_model_review_requested
+        self._manual_model_review_requested = False
+
         # Pass signals securely into Advisor
         advisor = AdvisorService(
             metrics,
@@ -230,7 +266,32 @@ class AppController:
             event_name=event_string,
             draft_history=history,
         )
-        recommendations = advisor.evaluate_pack(pack_cards, pi, current_pack=pk)
+        recommendations = advisor.evaluate_pack(
+            pack_cards,
+            pi,
+            current_pack=pk,
+            manual_model_review=manual_model_review,
+            state_complete=(detailed_logs is not False and pk > 0 and pi > 0),
+        )
+        if detailed_logs is False:
+            warning = (
+                "Arena Detailed Logs are disabled; picks and the reconstructed pool may be incomplete."
+            )
+            for recommendation in recommendations:
+                if warning not in recommendation.data_caveats:
+                    recommendation.data_caveats.insert(0, warning)
+
+        self._apply_optional_codex_review(
+            advisor=advisor,
+            recommendations=recommendations,
+            pack_cards=pack_cards,
+            taken_cards=taken_cards,
+            event_string=event_string,
+            pack_number=pk,
+            pick_number=pi,
+            draft_key=str(draft_id or f"{event_string}:{start_time}"),
+            manual=manual_model_review,
+        )
 
         # UPDATE UI STATE
         if pk > 0:
@@ -306,3 +367,72 @@ class AppController:
 
         self.app.current_pack_data = pack_cards
         self.app.current_missing_data = missing_cards
+
+    def _apply_optional_codex_review(
+        self,
+        *,
+        advisor,
+        recommendations,
+        pack_cards,
+        taken_cards,
+        event_string,
+        pack_number,
+        pick_number,
+        draft_key,
+        manual,
+    ):
+        config = self.config.model_assistance
+        decision = advisor.last_model_decision
+        if (
+            self.config.settings.advisor_engine != "contextual_v2"
+            or not config.enabled
+            or decision is None
+            or not recommendations
+        ):
+            return
+
+        request = build_review_request(
+            event_name=event_string,
+            pack_number=pack_number,
+            pick_number=pick_number,
+            pack_cards=pack_cards,
+            pool_cards=taken_cards,
+            recommendations=recommendations,
+        )
+        if request is None:
+            if manual:
+                recommendations[0].data_caveats.append(
+                    "Codex review needs stable Arena card IDs; local ranking is shown."
+                )
+            return
+
+        outcome = self.codex_reviews.outcome(request.digest)
+        if outcome is not None:
+            if outcome.status == "success" and outcome.review is not None:
+                application = apply_codex_review(recommendations, outcome.review)
+                if application.accepted:
+                    self.codex_reviews.mark_applied(
+                        request.digest, changed_order=application.changed_order
+                    )
+            elif outcome.detail:
+                recommendations[0].data_caveats.append(
+                    f"Codex review unavailable ({outcome.detail}); local ranking is shown."
+                )
+            return
+
+        if not decision.should_call:
+            if manual:
+                recommendations[0].data_caveats.append(
+                    f"Codex review skipped: {decision.reason}."
+                )
+            return
+        request_status = self.codex_reviews.request(
+            request,
+            draft_key=draft_key,
+            routing_reason=decision.reason,
+            manual=manual,
+        )
+        if request_status in {"started", "in_flight"}:
+            recommendations[0].data_caveats.append(
+                "Codex review is running in the background; local ranking is shown now."
+            )

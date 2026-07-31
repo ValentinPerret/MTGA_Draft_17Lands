@@ -125,6 +125,7 @@ class SettingsWindow(tkinter.Toplevel):
         features = [
             ("Always On Top", "always_on_top"),
             ("Auto-Sync Cloud Datasets", "auto_sync_datasets"),
+            ("Enable Local Codex Review", "model_assistance_enabled"),
             ("Highlight Row by Mana Cost", "card_colors_enabled"),
             ("Check for Dataset Updates", "update_notifications_enabled"),
             ("Alert on Missing Datasets", "missing_notifications_enabled"),
@@ -145,6 +146,28 @@ class SettingsWindow(tkinter.Toplevel):
             )
 
         r += len(features) + 1
+
+        ttk.Label(container, text="Codex Model Override:").grid(
+            row=r, column=0, sticky="e", padx=Theme.scaled_val(5)
+        )
+        self.vars["model_name"] = tkinter.StringVar()
+        ttk.Entry(container, textvariable=self.vars["model_name"], width=28).grid(
+            row=r, column=1, sticky="ew", pady=Theme.scaled_val(2)
+        )
+        r += 1
+
+        ttk.Label(container, text="Automatic Reviews / Draft:").grid(
+            row=r, column=0, sticky="e", padx=Theme.scaled_val(5)
+        )
+        self.vars["model_call_limit"] = tkinter.IntVar()
+        ttk.Spinbox(
+            container,
+            from_=0,
+            to=50,
+            textvariable=self.vars["model_call_limit"],
+            width=8,
+        ).grid(row=r, column=1, sticky="w", pady=Theme.scaled_val(2))
+        r += 1
 
         # --- SECTION: SYSTEM PATHS ---
         ttk.Label(
@@ -194,6 +217,10 @@ class SettingsWindow(tkinter.Toplevel):
         self.vars["filter_format"].set(s.filter_format)
         self.vars["ui_size"].set(self.original_ui_size)
         self.vars["advisor_engine"].set(s.advisor_engine)
+        self.vars["model_name"].set(self.configuration.model_assistance.model)
+        self.vars["model_call_limit"].set(
+            self.configuration.model_assistance.automatic_call_limit_per_draft
+        )
 
         # Paths
         self.vars["arena_log_location"].set(s.arena_log_location)
@@ -213,6 +240,9 @@ class SettingsWindow(tkinter.Toplevel):
         for key in checkbox_keys:
             val = getattr(s, key)
             self.vars[key].set(int(val))
+        self.vars["model_assistance_enabled"].set(
+            int(self.configuration.model_assistance.enabled)
+        )
 
         self._toggle_traces(True)
 
@@ -237,7 +267,15 @@ class SettingsWindow(tkinter.Toplevel):
         val = self.vars[key].get()
 
         # Handle type conversion
-        if isinstance(val, int) and key != "result_format":
+        if key == "model_assistance_enabled":
+            val = bool(val)
+            self.configuration.model_assistance.enabled = val
+        elif key == "model_name":
+            self.configuration.model_assistance.model = str(val).strip()
+        elif key == "model_call_limit":
+            val = max(0, min(50, int(val)))
+            self.configuration.model_assistance.automatic_call_limit_per_draft = val
+        elif isinstance(val, int) and key != "result_format":
             bool_val = bool(val)
             setattr(self.configuration.settings, key, bool_val)
             val = bool_val
@@ -265,6 +303,7 @@ class SettingsWindow(tkinter.Toplevel):
 
             new_conf, _ = read_configuration()
             self.configuration.settings = new_conf.settings
+            self.configuration.model_assistance = new_conf.model_assistance
             self._load_settings()
             if self.on_update_callback:
                 try:

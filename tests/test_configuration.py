@@ -147,6 +147,8 @@ def test_contextual_advisor_configuration_defaults_and_validation():
     config = Configuration()
     assert config.settings.advisor_engine == "legacy"
     assert config.model_assistance.enabled is False
+    assert config.model_assistance.provider == "codex"
+    assert config.model_assistance.request_timeout_seconds == 12.0
     assert config.model_assistance.automatic_call_limit_per_draft == 10
 
     invalid = Configuration.model_validate(

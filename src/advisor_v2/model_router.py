@@ -1,7 +1,7 @@
-"""Policy-only router for optional model review.
+"""Policy-only router for optional Codex review.
 
-No network client lives here. The local result is always complete before this policy
-is consulted, and a caller may safely ignore a positive decision.
+The local result is always complete before this policy is consulted, and a caller
+may safely ignore a positive decision.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ class ModelReviewRouter:
         config = self.config
         if config is None or not getattr(config, "enabled", False):
             return ModelCallDecision(False, "model assistance disabled")
-        if not getattr(config, "model", ""):
-            return ModelCallDecision(False, "no API model configured")
+        if getattr(config, "provider", "codex") != "codex":
+            return ModelCallDecision(False, "unsupported model review provider")
         if not state_complete:
             return ModelCallDecision(False, "draft state incomplete or stale")
         if equivalent_cached:
