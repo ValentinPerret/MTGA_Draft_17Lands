@@ -224,8 +224,9 @@ class FileExtractor(UIProgress):
         status,
         ui,
         threshold=COLOR_WIN_RATE_GAME_COUNT_THRESHOLD_DEFAULT,
+        update_callback=None,
     ):
-        super().__init__(progress, status, ui)
+        super().__init__(progress, status, ui, update_callback=update_callback)
         self.selected_sets = []
         self.set_list = []
         self.draft = ""

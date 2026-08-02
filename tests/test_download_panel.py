@@ -5,6 +5,7 @@ Iron-clad validation for the Dataset Manager.
 
 import pytest
 import tkinter
+import threading
 from unittest.mock import MagicMock, patch
 from src.ui.windows.download import DownloadWindow, DatasetArgs
 from src.limited_sets import SetInfo
@@ -215,6 +216,25 @@ class TestDownloadPanel:
         assert str(panel.btn_dl["state"]) == "normal"
         assert panel.progress["value"] == 0
         assert panel.vars["status"].get() == "DOWNLOAD FAILED"
+        mock_err.assert_called_once_with("Download Error", "Network Timeout")
+
+    @patch("tkinter.messagebox.showerror")
+    def test_worker_error_is_queued_without_calling_tk(
+        self, mock_err, root, mock_sets_data, config
+    ):
+        """A background worker must never invoke Tk, including widget.after()."""
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+        panel.after = MagicMock(side_effect=AssertionError("worker called Tk"))
+
+        worker = threading.Thread(target=panel._safe_error, args=("Network Timeout",))
+        worker.start()
+        worker.join()
+
+        panel.after.assert_not_called()
+        mock_err.assert_not_called()
+
+        panel._download_thread = None
+        panel._poll_download_events()
         mock_err.assert_called_once_with("Download Error", "Network Timeout")
 
     @patch("src.ui.windows.download.os.remove")

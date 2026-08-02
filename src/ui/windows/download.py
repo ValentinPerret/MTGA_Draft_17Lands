@@ -1,5 +1,6 @@
 import tkinter
 import threading
+import queue
 import os
 import json
 from tkinter import ttk, messagebox
@@ -36,6 +37,8 @@ class DownloadWindow(ttk.Frame):
         self.on_update_callback = on_update_callback
         self.vars = {}
         self._download_thread = None
+        self._download_events = queue.Queue()
+        self._download_poll_id = None
         self._build_ui()
 
     def refresh(self):
@@ -469,16 +472,51 @@ class DownloadWindow(ttk.Frame):
         self._download_thread = threading.Thread(
             target=self._run_download_process, args=(args, ctx), daemon=True
         )
+        self._schedule_download_poll()
         self._download_thread.start()
+
+    def _schedule_download_poll(self):
+        """Start polling worker messages from the Tk main thread."""
+        if self._download_poll_id is None:
+            self._download_poll_id = self.after(50, self._poll_download_events)
+
+    def _queue_progress_update(self, event_type, value):
+        """Receive progress from a worker without touching Tk."""
+        self._download_events.put((event_type, value))
+
+    def _poll_download_events(self):
+        """Apply queued worker messages. This method only runs on Tk's thread."""
+        self._download_poll_id = None
+        while True:
+            try:
+                event_type, value = self._download_events.get_nowait()
+            except queue.Empty:
+                break
+
+            if event_type == "status":
+                self.vars["status"].set(value)
+            elif event_type == "progress":
+                self.progress["value"] = value
+            elif event_type == "success":
+                self._finalize_download(value)
+            elif event_type == "error":
+                self._handle_error(value)
+
+        if (
+            self._download_thread is not None
+            and self._download_thread.is_alive()
+        ) or not self._download_events.empty():
+            self._schedule_download_poll()
 
     def _run_download_process(self, args, ctx):
         try:
             ex = FileExtractor(
                 ctx["db_loc"],
-                self.progress,
-                self.vars["status"],
-                self,
+                None,
+                None,
+                None,
                 threshold=ctx["threshold"],
+                update_callback=self._queue_progress_update,
             )
             ex.clear_data()
             ex.select_sets(self.sets_data[ctx["set_key"]])
@@ -508,30 +546,16 @@ class DownloadWindow(ttk.Frame):
             self._safe_error(str(e))
 
     def _safe_finalize(self, msg):
-        def callback():
-            if hasattr(self, "winfo_exists") and self.winfo_exists():
-                self._finalize_download(msg)
-
         if threading.current_thread() is threading.main_thread():
-            callback()
+            self._finalize_download(msg)
         else:
-            try:
-                self.after(0, callback)
-            except RuntimeError:
-                pass  # Safely ignore during headless test execution
+            self._download_events.put(("success", msg))
 
     def _safe_error(self, err):
-        def callback():
-            if hasattr(self, "winfo_exists") and self.winfo_exists():
-                self._handle_error(err)
-
         if threading.current_thread() is threading.main_thread():
-            callback()
+            self._handle_error(err)
         else:
-            try:
-                self.after(0, callback)
-            except RuntimeError:
-                pass  # Safely ignore during headless test execution
+            self._download_events.put(("error", err))
 
     def _finalize_download(self, msg):
         self.btn_dl.configure(state="normal")
