@@ -220,8 +220,8 @@ class CardToolTip(tkinter.Toplevel):
     _MAX_IN_MEMORY_IMAGES = 60
 
     @classmethod
-    def create(cls, parent, card, images_enabled, scale):
-        """Show one persistent card preview, replacing any previous preview."""
+    def create(cls, parent, card, images_enabled, scale, persistent=True):
+        """Show one card preview, replacing any previous preview."""
         previous = cls._active_tooltip
         cls._active_tooltip = None
         if previous is not None:
@@ -231,15 +231,24 @@ class CardToolTip(tkinter.Toplevel):
             except tkinter.TclError:
                 pass
 
-        tooltip = cls(parent, card, images_enabled, scale)
+        tooltip = cls(parent, card, images_enabled, scale, persistent=persistent)
         try:
             if tooltip.winfo_exists():
                 cls._active_tooltip = tooltip
         except tkinter.TclError:
             pass
+        return tooltip
 
-    def __init__(self, parent, card, images_enabled, scale):
+    @classmethod
+    def dismiss_unpinned(cls):
+        """Close a dwell preview without disturbing a click-pinned preview."""
+        tooltip = cls._active_tooltip
+        if tooltip is not None and not getattr(tooltip, "_persistent", True):
+            tooltip._close()
+
+    def __init__(self, parent, card, images_enabled, scale, persistent=True):
         super().__init__(parent)
+        self._persistent = persistent
         self.parent = parent
         self._owner = None
         self._owner_bind_after_id = None
@@ -1667,7 +1676,36 @@ class CardPile(tb.Frame):
         )
         lb.pack(side=LEFT, fill=BOTH, expand=True)
 
+        hover_job = None
+
+        def _cancel_hover(e=None):
+            nonlocal hover_job
+            if hover_job is not None:
+                try:
+                    ch.after_cancel(hover_job)
+                except tkinter.TclError:
+                    pass
+                hover_job = None
+            CardToolTip.dismiss_unpinned()
+
+        def _show_hover():
+            nonlocal hover_job
+            hover_job = None
+            CardToolTip.create(
+                ch,
+                card_data,
+                self.app.configuration.features.images_enabled,
+                Theme.current_scale,
+                persistent=False,
+            )
+
+        def _schedule_hover(e=None):
+            nonlocal hover_job
+            _cancel_hover()
+            hover_job = ch.after(425, _show_hover)
+
         def _trigger_tooltip(e):
+            _cancel_hover()
             CardToolTip.create(
                 ch,  # Anchor safely to the row container
                 card_data,
@@ -1675,7 +1713,9 @@ class CardPile(tb.Frame):
                 Theme.current_scale,
             )
 
-        # Require an explicit click to view the tooltip to stop erratic hovering/flashing
-        ch.bind("<Button-1>", _trigger_tooltip)
-        cv.bind("<Button-1>", _trigger_tooltip)
-        lb.bind("<Button-1>", _trigger_tooltip)
+        # A short dwell avoids the flashing caused by immediate hover previews;
+        # clicking keeps the existing persistent/pinned behavior.
+        for widget in (ch, cv, lb):
+            widget.bind("<Enter>", _schedule_hover)
+            widget.bind("<Leave>", _cancel_hover)
+            widget.bind("<Button-1>", _trigger_tooltip)

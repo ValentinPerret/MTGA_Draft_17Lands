@@ -13,8 +13,73 @@ from src.utils import open_file
 
 
 class CardInteractionManager:
+    HOVER_DELAY_MS = 425
+
     def __init__(self, app_context):
         self.app = app_context
+        self._hover_jobs = {}
+        self._hover_rows = {}
+
+    def bind_hover_preview(self, table, data_provider):
+        """Show a preview after a deliberate dwell; clicks still pin it."""
+        if table is None or getattr(table, "_card_hover_bound", False):
+            return
+
+        def cancel_preview(event=None):
+            job = self._hover_jobs.pop(table, None)
+            if job is not None:
+                try:
+                    table.after_cancel(job)
+                except tkinter.TclError:
+                    pass
+            self._hover_rows.pop(table, None)
+            CardToolTip.dismiss_unpinned()
+
+        def show_row(row_id):
+            self._hover_jobs.pop(table, None)
+            if self._hover_rows.get(table) != row_id:
+                return
+            try:
+                if not table.winfo_exists():
+                    return
+                card_name = self._card_name_from_row(table, row_id)
+                if not card_name:
+                    return
+                self.show_tooltip(
+                    card_name,
+                    table,
+                    data_provider() or [],
+                    persistent=False,
+                )
+            except tkinter.TclError:
+                return
+
+        def on_motion(event):
+            try:
+                row_id = (
+                    table.identify_row(event.y)
+                    if table.identify_region(event.x, event.y) in ("tree", "cell")
+                    else ""
+                )
+            except tkinter.TclError:
+                return
+            if row_id == self._hover_rows.get(table):
+                return
+            cancel_preview()
+            if not row_id:
+                return
+            self._hover_rows[table] = row_id
+            self._hover_jobs[table] = table.after(
+                self.HOVER_DELAY_MS, lambda row=row_id: show_row(row)
+            )
+
+        table.bind("<Motion>", on_motion, add="+")
+        table.bind("<Leave>", cancel_preview, add="+")
+        table.bind("<MouseWheel>", cancel_preview, add="+")
+        table.bind("<ButtonPress-1>", cancel_preview, add="+")
+        table.bind("<ButtonPress-3>", cancel_preview, add="+")
+        table.bind("<Destroy>", cancel_preview, add="+")
+        table._card_hover_bound = True
 
     def on_card_select(self, event, table, source_type):
         """Triggered when a user clicks a row in the Pack or Wheel tables."""
@@ -45,28 +110,33 @@ class CardInteractionManager:
             else self.app.current_missing_data
         )
 
-        item = table.item(selection[0])
-        card_name = item.get("text")
-
+        card_name = self._card_name_from_row(table, selection[0])
         if not card_name:
-            item_vals = item["values"]
-            try:
-                name_idx = getattr(
-                    table,
-                    "active_fields",
-                    self.app.dashboard.pack_manager.active_fields,
-                ).index("name")
-                raw_name = str(item_vals[name_idx])
-                card_name = (
-                    raw_name.replace("⭐ ", "")
-                    .replace("[+] ", "")
-                    .replace("*", "")
-                    .strip()
-                )
-            except (ValueError, AttributeError, IndexError):
-                return
+            return
 
         self.show_tooltip(card_name, table, data_list)
+
+    def _card_name_from_row(self, table, row_id):
+        item = table.item(row_id)
+        card_name = item.get("text")
+        if not card_name:
+            item_vals = item.get("values", [])
+            try:
+                fields = getattr(table, "active_fields", None)
+                if not fields:
+                    fields = self.app.dashboard.pack_manager.active_fields
+                name_idx = fields.index("name")
+                card_name = str(item_vals[name_idx])
+            except (ValueError, AttributeError, IndexError):
+                return ""
+        return (
+            str(card_name)
+            .replace("⭐ ", "")
+            .replace("[+] ", "")
+            .replace("*", "")
+            .split(" ⟳", 1)[0]
+            .strip()
+        )
 
     def show_tooltip_from_advisor(self, card_name, widget):
         """Triggered when a user clicks a card in the Advisor Recommendations panel."""
@@ -76,7 +146,7 @@ class CardInteractionManager:
             self.app.current_pack_data + self.app.current_missing_data,
         )
 
-    def show_tooltip(self, card_name, widget, data_list):
+    def show_tooltip(self, card_name, widget, data_list, persistent=True):
         """Finds the card data and generates the Tooltip overlay."""
         found = next(
             (c for c in data_list if c.get(constants.DATA_FIELD_NAME) == card_name),
@@ -91,6 +161,7 @@ class CardInteractionManager:
                 found,
                 self.app.configuration.features.images_enabled,
                 current_scale,
+                persistent=persistent,
             )
 
     def on_card_context_menu(self, event, table, source_type):

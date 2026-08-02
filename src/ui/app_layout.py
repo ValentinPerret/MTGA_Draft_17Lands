@@ -80,6 +80,14 @@ class AppLayoutManager:
             on_advisor_click=self.app.interactions.show_tooltip_from_advisor,
             on_context_menu=self.app.interactions.on_card_context_menu,
         )
+        self.app.interactions.bind_hover_preview(
+            self.dashboard.get_treeview("pack"),
+            lambda: self.app.current_pack_data,
+        )
+        self.app.interactions.bind_hover_preview(
+            self.dashboard.get_treeview("missing"),
+            lambda: self.app.current_missing_data,
+        )
 
         self.bottom_pane = ttk.Frame(self.splitter, style="App.TFrame")
         self.splitter.add(self.bottom_pane, weight=3)
@@ -159,16 +167,71 @@ class AppLayoutManager:
         self.notebook.add(self.panel_compare, text="Comparisons")
         self.notebook.add(self.panel_tiers, text="Tier lists")
 
-        # Safely trigger dataset UI refreshes if the panel supports it
-        self.notebook.bind(
-            "<<NotebookTabChanged>>",
-            lambda e: (
-                self.panel_data.refresh()
-                if hasattr(self.panel_data, "refresh")
-                and "Datasets" in self.notebook.tab(self.notebook.select(), "text")
-                else None
+        self._bind_tool_card_previews()
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+    def _bind_tool_card_previews(self):
+        """Add a stable delayed preview to every card table."""
+        bindings = (
+            (
+                getattr(self.panel_taken, "table", None),
+                lambda: getattr(self.panel_taken, "current_display_list", []),
+            ),
+            (
+                getattr(self.panel_suggest, "table", None),
+                lambda: getattr(self.panel_suggest, "current_deck_list", []),
+            ),
+            (
+                getattr(self.panel_suggest, "sb_table", None),
+                lambda: getattr(self.panel_suggest, "current_sb_list", []),
+            ),
+            (
+                getattr(self.panel_custom, "main_table", None),
+                lambda: getattr(self.panel_custom, "deck_list", []),
+            ),
+            (
+                getattr(self.panel_custom, "sb_table", None),
+                lambda: getattr(self.panel_custom, "sb_list", []),
+            ),
+            (
+                getattr(self.panel_compare, "table", None),
+                lambda: getattr(self.panel_compare, "compare_list", []),
             ),
         )
+        for table, provider in bindings:
+            if table is not None:
+                self.app.interactions.bind_hover_preview(table, provider)
+
+    def _on_tab_changed(self, event=None):
+        self.refresh_active_panel()
+
+    def refresh_active_panel(self):
+        """Refresh only the visible tool instead of every expensive hidden tab."""
+        if not self.tabs_visible or self.notebook is None:
+            return False
+        try:
+            selected = self.notebook.select()
+            active_panel = next(
+                (
+                    panel
+                    for panel in (
+                        self.panel_data,
+                        self.panel_taken,
+                        self.panel_suggest,
+                        self.panel_custom,
+                        self.panel_compare,
+                        self.panel_tiers,
+                    )
+                    if str(panel) == str(selected)
+                ),
+                None,
+            )
+            if active_panel is not None and hasattr(active_panel, "refresh"):
+                active_panel.refresh()
+                return True
+        except (AttributeError, tkinter.TclError):
+            logger.debug("Active tool refresh skipped", exc_info=True)
+        return False
 
     def toggle_tabs(self):
         if self.tabs_visible:
@@ -179,6 +242,7 @@ class AppLayoutManager:
             self.splitter.add(self.bottom_pane, weight=2)
             self.btn_toggle_tabs.config(text="Hide tools")
             self.tabs_visible = True
+            self.refresh_active_panel()
 
     def ensure_tabs_visible(self):
         if not self.tabs_visible:

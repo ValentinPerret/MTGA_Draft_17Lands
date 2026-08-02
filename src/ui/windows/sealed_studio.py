@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src import constants
 from src.configuration import Configuration
 from src.ui.styles import Theme
+from src.ui.main_thread import MainThreadDispatcher
 from src.ui.components import (
     DynamicTreeviewManager,
     ManaCurvePlot,
@@ -44,6 +45,7 @@ class SealedStudioWindow(tb.Toplevel):
     ):
         super().__init__(parent)
         self.app_context = app_context
+        self.ui_dispatcher = MainThreadDispatcher(self)
         self.configuration = configuration
         self.metrics = metrics
 
@@ -1190,21 +1192,15 @@ class SealedStudioWindow(tb.Toplevel):
                         for t in canvas.find_withtag(overlay_tag):
                             canvas.tag_raise(t)
 
-                self.after(0, apply_img)
+                self.ui_dispatcher.post(apply_img)
             except Exception:
-                # Tell user image loading failed
-                if canvas.winfo_exists():
-                    try:
+                def apply_err():
+                    if canvas.winfo_exists():
+                        canvas.itemconfigure(
+                            text_id, text=f"{name}\n(Image Unavailable)"
+                        )
 
-                        def apply_err():
-                            if canvas.winfo_exists():
-                                canvas.itemconfigure(
-                                    text_id, text=f"{name}\n(Image Unavailable)"
-                                )
-
-                        self.after(0, apply_err)
-                    except RuntimeError:
-                        pass
+                self.ui_dispatcher.post(apply_err)
 
         self.image_executor.submit(fetch)
 
@@ -1626,8 +1622,8 @@ class SealedStudioWindow(tb.Toplevel):
                         parent=self,
                     )
 
-                self.after(0, _err)
+                self.ui_dispatcher.post(_err)
             finally:
-                self.after(0, self._refresh_data)
+                self.ui_dispatcher.post(self._refresh_data)
 
         threading.Thread(target=_api_call, daemon=True).start()

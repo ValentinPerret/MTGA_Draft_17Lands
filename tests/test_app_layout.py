@@ -115,3 +115,28 @@ class TestAppLayoutManager:
         # Test handling of missing data
         layout.update_session_info(None, None, None)
         assert layout.lbl_session_info.cget("text") == ""
+
+    def test_refresh_active_panel_does_not_rebuild_hidden_tools(self, mock_app):
+        layout = AppLayoutManager(mock_app)
+        layout.build()
+        panels = [
+            layout.panel_data,
+            layout.panel_taken,
+            layout.panel_suggest,
+            layout.panel_custom,
+            layout.panel_compare,
+            layout.panel_tiers,
+        ]
+        for panel in panels:
+            panel.refresh = MagicMock()
+
+        layout.notebook.select(layout.panel_suggest)
+        mock_app.root.update()
+        for panel in panels:
+            panel.refresh.reset_mock()
+
+        assert layout.refresh_active_panel() is True
+        layout.panel_suggest.refresh.assert_called_once()
+        for panel in panels:
+            if panel is not layout.panel_suggest:
+                panel.refresh.assert_not_called()

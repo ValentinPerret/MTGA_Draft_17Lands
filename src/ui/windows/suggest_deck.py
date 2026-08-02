@@ -23,6 +23,7 @@ from src import constants
 from src.card_logic import copy_deck, get_strict_colors, is_castable, get_functional_cmc
 from src.ui.styles import Theme
 from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.main_thread import MainThreadDispatcher
 from src.utils import bind_scroll
 
 
@@ -40,6 +41,7 @@ class SuggestDeckPanel(ttk.Frame):
         self.configuration = configuration
         self.on_export_custom = on_export_custom
         self.app_context = app_context
+        self.ui_dispatcher = MainThreadDispatcher(self)
 
         self.suggestions: Dict[str, Any] = {}
         self.current_deck_list: List[Dict] = []
@@ -53,6 +55,8 @@ class SuggestDeckPanel(ttk.Frame):
         self._builder_results = queue.Queue()
         self._builder_poll_id = None
         self._builder_generation = 0
+        self._last_build_signature = None
+        self._pending_build_refresh = False
         self.hand_images = []
         self.hand_frames = []
 
@@ -364,14 +368,14 @@ class SuggestDeckPanel(ttk.Frame):
             self._draw_sample_hand()
 
     def _run_monte_carlo_task(self, deck_list):
-        self.after(0, lambda: self._show_sim_loading())
+        self.ui_dispatcher.post(self._show_sim_loading)
         try:
             from src.card_logic import simulate_deck
 
             stats = simulate_deck(deck_list, iterations=10000)
-            self.after(0, lambda: self._show_sim_results(stats))
+            self.ui_dispatcher.post(self._show_sim_results, stats)
         except Exception as e:
-            self.after(0, lambda e=e: self._show_sim_error(str(e)))
+            self.ui_dispatcher.post(self._show_sim_error, str(e))
 
     def _show_sim_loading(self, msg="Running 10,000 Monte Carlo Simulations..."):
         sim_frame = getattr(self, "sim_frame", None)
@@ -828,32 +832,25 @@ class SuggestDeckPanel(ttk.Frame):
 
                     lbl.configure(cursor="hand2")
 
-            # Safely sync to main UI thread
-            self.after(0, apply_img)
+            self.ui_dispatcher.post(apply_img)
 
         except Exception:
-            # Tell user image loading failed
-            if container_frame.winfo_exists():
-                try:
+            def apply_err():
+                if container_frame.winfo_exists():
+                    for w in container_frame.winfo_children():
+                        w.destroy()
+                    import ttkbootstrap as ttk
+                    from src.ui.styles import Theme
 
-                    def apply_err():
-                        if container_frame.winfo_exists():
-                            for w in container_frame.winfo_children():
-                                w.destroy()
-                            import ttkbootstrap as ttk
-                            from src.ui.styles import Theme
+                    ttk.Label(
+                        container_frame,
+                        text="Image\nUnavailable",
+                        bootstyle="danger",
+                        justify="center",
+                        font=Theme.scaled_font(9),
+                    ).pack(expand=True)
 
-                            ttk.Label(
-                                container_frame,
-                                text="Image\nUnavailable",
-                                bootstyle="danger",
-                                justify="center",
-                                font=Theme.scaled_font(9),
-                            ).pack(expand=True)
-
-                    self.after(0, apply_err)
-                except RuntimeError:
-                    pass
+            self.ui_dispatcher.post(apply_err)
 
     def _on_theme_change(self, event=None):
         stats_canvas = getattr(self, "stats_canvas", None)
@@ -867,11 +864,37 @@ class SuggestDeckPanel(ttk.Frame):
     def _calculate_suggestions(self):
         raw_pool = self.draft.retrieve_taken_cards()
 
+        pool_signature = tuple(
+            sorted(
+                f"{card.get('id') or card.get('name') or ''}:{card.get('count', 1)}"
+                for card in (raw_pool or [])
+            )
+        )
+        dataset_name = self.configuration.card_data.latest_dataset
+        try:
+            dataset_version = (
+                dataset_name,
+                os.path.getmtime(os.path.join(constants.SETS_FOLDER, dataset_name)),
+            )
+        except (OSError, TypeError):
+            dataset_version = (dataset_name, None)
+        build_signature = (
+            pool_signature,
+            dataset_version,
+            self.configuration.settings.deck_filter,
+        )
+        if build_signature == self._last_build_signature:
+            return
+        if self.is_building:
+            self._pending_build_refresh = True
+            return
+
         playable_spells = [
             c for c in (raw_pool or []) if "Land" not in c.get("types", [])
         ]
 
         if not playable_spells or len(playable_spells) < 22:
+            self._last_build_signature = build_signature
             msg = (
                 f"Not enough spells drafted yet (Have {len(playable_spells)}, Need 22)."
             )
@@ -883,10 +906,8 @@ class SuggestDeckPanel(ttk.Frame):
                 self.app_context.loading_overlay.hide()
             return
 
-        if self.is_building:
-            return
-
         self.is_building = True
+        self._last_build_signature = build_signature
         self._builder_generation += 1
         builder_generation = self._builder_generation
         self.var_archetype.set("Initializing AI Builder...")
@@ -905,8 +926,6 @@ class SuggestDeckPanel(ttk.Frame):
             if hasattr(self, "orchestrator")
             else self.draft.retrieve_current_limited_event()
         )
-        dataset_name = self.configuration.card_data.latest_dataset
-
         def _progress_cb(msg):
             # This callback runs inside the builder worker. Tk calls made from
             # here can deadlock on macOS, so only pass plain data to the UI thread.
@@ -998,6 +1017,7 @@ class SuggestDeckPanel(ttk.Frame):
             self._update_dropdown_options([msg])
             self.var_archetype.set(msg)
             self._clear_table()
+            self._start_pending_build_if_needed()
             return
 
         self.suggestions = sorted_decks
@@ -1006,9 +1026,11 @@ class SuggestDeckPanel(ttk.Frame):
 
         # Always snap to the mathematically strongest deck once analysis completes
         self._on_deck_selection_change(dropdown_labels[0])
+        self._start_pending_build_if_needed()
 
     def _handle_builder_error(self, error_msg):
         self.is_building = False
+        self._last_build_signature = None
         if getattr(self, "app_context", None) and hasattr(
             self.app_context, "loading_overlay"
         ):
@@ -1022,6 +1044,12 @@ class SuggestDeckPanel(ttk.Frame):
         import logging
 
         logging.getLogger(__name__).error(f"Suggest Deck Error: {error_msg}")
+        self._start_pending_build_if_needed()
+
+    def _start_pending_build_if_needed(self):
+        if self._pending_build_refresh:
+            self._pending_build_refresh = False
+            self.after_idle(self._calculate_suggestions)
 
     def _update_dropdown_options(self, options: List[str]):
         menu = self.om_archetype["menu"]

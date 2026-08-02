@@ -661,6 +661,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.tree, lambda: self.current_pack_cards
+        )
 
         _populate_tree(
             self.tree,
@@ -679,6 +682,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.missing_tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.missing_tree, lambda: self.current_missing_cards
+        )
 
         _populate_tree(
             self.missing_tree,
@@ -696,6 +702,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.pool_tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.pool_tree, lambda: self.current_pool_cards
+        )
 
         _populate_tree(
             self.pool_tree,

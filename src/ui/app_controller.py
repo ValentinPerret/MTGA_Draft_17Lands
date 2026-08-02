@@ -65,14 +65,8 @@ class AppController:
             self.app._loading = False
 
     def execute_deep_sync(self):
-        """Phase 2: Population of heavy tabs (Deck Builder, Card Pool)."""
+        """Phase 2: Populate only the tool the user can currently see."""
         self.app.vars["status_text"].set("Ready")
-
-        for p in [self.app.panel_taken, self.app.panel_suggest]:
-            try:
-                p.refresh()
-            except Exception:
-                pass
 
         if not self.config.card_data.latest_dataset:
             self.app.notebook.select(self.app.panel_data)
@@ -80,6 +74,8 @@ class AppController:
             "DraftLog_"
         ):
             self.app.notebook.select(self.app.panel_suggest)
+
+        self.app.layout_manager.refresh_active_panel()
 
         self.root.after(1500, self.check_background_updates)
 
@@ -92,7 +88,9 @@ class AppController:
             try:
                 v, _ = AppUpdate().retrieve_file_version()
                 if v and float(v) > float(constants.APPLICATION_VERSION):
-                    self.root.after(0, lambda: self.app.menu_bar.notify_app_update(v))
+                    self.orchestrator.update_queue.put(
+                        {"event": "app_update_available", "version": v}
+                    )
             except Exception as e:
                 logger.error(f"App update check failed: {e}")
 
@@ -114,19 +112,33 @@ class AppController:
                 self.orchestrator.step_process()
 
             update_detected = False
-            scan_completed = False
-            scan_succeeded = True
+            operation_completed = False
+            operation_succeeded = True
+            completion_status = "Ready"
             while True:
                 try:
                     msg = self.orchestrator.update_queue.get_nowait()
-                    if isinstance(msg, dict) and msg.get("event") == "scan_complete":
-                        scan_completed = True
-                        scan_succeeded = bool(msg.get("success", True))
+                    if isinstance(msg, dict) and msg.get("event") in (
+                        "scan_complete",
+                        "operation_complete",
+                    ):
+                        operation_completed = True
+                        operation_succeeded = bool(msg.get("success", True))
+                        completion_status = msg.get(
+                            "status",
+                            "Ready" if operation_succeeded else "Operation failed",
+                        )
+                    elif (
+                        isinstance(msg, dict)
+                        and msg.get("event") == "app_update_available"
+                    ):
+                        self.app.menu_bar.notify_app_update(msg.get("version"))
                     elif isinstance(msg, dict) and "status" in msg:
                         self.app.vars["status_text"].set(msg["status"])
                         if hasattr(self.app, "loading_overlay"):
-                            self.app.loading_overlay.update_status(msg["status"])
-                        self.root.update_idletasks()
+                            self.app.loading_overlay.update_status(
+                                msg["status"], msg.get("detail")
+                            )
                     elif msg == "REFRESH":
                         update_detected = True
                 except queue.Empty:
@@ -145,12 +157,11 @@ class AppController:
                 if is_test:
                     self.root.update()
 
-            if scan_completed:
+            if operation_completed:
+                self.app.top_bar.set_history_dropdown_state("readonly")
                 if hasattr(self.app, "loading_overlay"):
                     self.app.loading_overlay.hide()
-                self.app.vars["status_text"].set(
-                    "Ready" if scan_succeeded else "Log scan failed"
-                )
+                self.app.vars["status_text"].set(completion_status)
 
             try:
                 ts = os.stat(self.orchestrator.scanner.arena_file).st_mtime
@@ -173,8 +184,10 @@ class AppController:
         self.app.vars["status_text"].set("Deep Scanning Log...")
         if hasattr(self.app, "loading_overlay"):
             self.app.loading_overlay.show("Reloading Application State")
-            self.app.loading_overlay.update_status("Deep Scanning Log...")
-        self.root.update_idletasks()
+            self.app.loading_overlay.update_status(
+                "Deep scanning Player.log...",
+                "Reading the log from the beginning and reconstructing every pack and pick.",
+            )
 
         with self.orchestrator.scanner.lock:
             self.orchestrator.scanner.clear_draft(True)
@@ -209,18 +222,14 @@ class AppController:
 
             full_path = os.path.join(SETS_FOLDER, latest_file)
             if os.path.exists(full_path):
-                try:
-                    self.orchestrator.scanner.retrieve_set_data(full_path)
-                    from src.card_logic import clear_deck_cache
-
-                    clear_deck_cache()
-                except Exception:
-                    pass
-
-        self.app.top_bar.update_data_sources()
-        self.app.top_bar.update_deck_filter_options()
-        self.orchestrator.request_math_update()
-        self.refresh_ui_data()
+                if hasattr(self.app, "loading_overlay"):
+                    self.app.loading_overlay.show("Indexing downloaded dataset")
+                    self.app.loading_overlay.update_status(
+                        "Reading card ratings...",
+                        "The download is complete; recommendations are being "
+                        "rebuilt from the new data.",
+                    )
+                self.orchestrator.request_dataset_load(full_path)
 
     def refresh_ui_data(self):
         """Core UI Synchronization Logic. Aggregates data, runs math engines, and updates the Views."""
@@ -368,19 +377,10 @@ class AppController:
                 scores,
             )
 
-        # Broadcast refresh downwards
-        for p in [
-            self.app.panel_taken,
-            self.app.panel_suggest,
-            self.app.panel_custom,
-            self.app.panel_compare,
-            self.app.panel_tiers,
-        ]:
-            try:
-                if hasattr(p, "refresh"):
-                    p.refresh()
-            except Exception:
-                pass
+        # Heavy tools are refreshed lazily. Rebuilding hidden deck simulations,
+        # comparisons and visual card grids on every log tick starves Tk's event
+        # loop and makes card previews appear intermittent.
+        self.app.layout_manager.refresh_active_panel()
 
         self.app.current_pack_data = pack_cards
         self.app.current_missing_data = missing_cards

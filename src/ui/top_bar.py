@@ -435,9 +435,11 @@ class TopBarControls(ttk.Frame):
             if hasattr(self.app, "loading_overlay"):
                 title_name = selection.replace("📂 ", "").replace("🔴 ", "")
                 self.app.loading_overlay.show(f"Loading: {title_name}")
-                self.app.loading_overlay.update_status("Queuing Draft...")
+                self.app.loading_overlay.update_status(
+                    "Preparing draft log...",
+                    "Reading picks and rebuilding the card pool. Larger logs can take a few seconds.",
+                )
 
-            self.app.root.update_idletasks()
             self.app.orchestrator.set_file_and_scan(filepath)
 
             if self.app.tabs_visible and "🔴 Live" not in selection:
@@ -484,24 +486,10 @@ class TopBarControls(ttk.Frame):
             if os.path.basename(path) != current_loaded:
                 if hasattr(self.app, "loading_overlay"):
                     self.app.loading_overlay.show(f"Evaluating {evt} ({grp})")
-                    self.app.loading_overlay.update_status("Processing dataset...")
-                self.app.root.update_idletasks()
+                    self.app.loading_overlay.update_status(
+                        "Preparing card ratings...",
+                        "Loading the selected 17Lands file and rebuilding recommendation indexes.",
+                    )
 
                 self.app.vars["status_text"].set("Loading Dataset...")
-                try:
-                    self.app.orchestrator.scanner.retrieve_set_data(path)
-                    self.app.configuration.card_data.latest_dataset = os.path.basename(
-                        path
-                    )
-                    write_configuration(self.app.configuration)
-                    from src.card_logic import clear_deck_cache
-
-                    clear_deck_cache()
-                except Exception as e:
-                    logger.error(f"Dataset load error: {e}")
-
-                self.app.vars["status_text"].set("Ready")
-                self.update_data_sources()
-                self.update_deck_filter_options()
-                self.app.orchestrator.request_math_update()
-                self.app._refresh_ui_data()
+                self.app.orchestrator.request_dataset_load(path)

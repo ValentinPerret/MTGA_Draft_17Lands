@@ -32,6 +32,7 @@ class DraftOrchestrator(threading.Thread):
 
         # Thread-safe queue for file swaps
         self._file_swap_queue = queue.Queue()
+        self._dataset_load_queue = queue.Queue()
 
         # Live tracking
         self.live_log_path = configuration.settings.arena_log_location
@@ -89,6 +90,10 @@ class DraftOrchestrator(threading.Thread):
         """Thread-safe way for the UI to request a log file change."""
         self._file_swap_queue.put(filepath)
 
+    def request_dataset_load(self, filepath):
+        """Load and index a ratings dataset on the watchdog thread."""
+        self._dataset_load_queue.put(filepath)
+
     def trigger_full_scan(self):
         """Thread-safe way for the UI to demand a deep log scan."""
         self._force_full_scan_event.set()
@@ -119,34 +124,86 @@ class DraftOrchestrator(threading.Thread):
     def run(self):
         logger.info("Background Watchdog started.")
         while not self._stop_event.is_set():
-            if self.monitoring_paused:
-                time.sleep(0.5)
-                continue
-            # A real Arena draft always wins over the local practice sandbox.
-            if self.is_practice_mode and self._check_live_log_for_draft():
-                logger.info("Live draft activity detected. Ending practice mode.")
-                self.end_practice_session(interrupted=True)
+            if not self.monitoring_paused:
+                # A real Arena draft always wins over the local practice sandbox.
+                if self.is_practice_mode and self._check_live_log_for_draft():
+                    logger.info("Live draft activity detected. Ending practice mode.")
+                    self.end_practice_session(interrupted=True)
 
-            # Automatically snap back to the live draft log ONLY if a draft event is detected
-            if getattr(self, "live_log_path", None) and os.path.exists(
-                self.live_log_path
-            ) and not self.is_practice_mode:
-                if self.scanner.arena_file != self.live_log_path:
-                    # We are looking at a past log. Check for actual live draft activity.
-                    if self._check_live_log_for_draft():
-                        logger.info(
-                            "Live draft activity detected. Going back to live draft."
-                        )
-                        self.set_file_and_scan(self.live_log_path)
-                else:
-                    # We are already on the live log. Keep our tracker up to date.
-                    try:
-                        self._last_live_file_size = os.path.getsize(self.live_log_path)
-                        self._live_log_offset = self._last_live_file_size
-                    except Exception:
-                        pass
+                # Automatically snap back to the live draft log ONLY if a draft event is detected
+                if getattr(self, "live_log_path", None) and os.path.exists(
+                    self.live_log_path
+                ) and not self.is_practice_mode:
+                    if self.scanner.arena_file != self.live_log_path:
+                        # We are looking at a past log. Check for actual live draft activity.
+                        if self._check_live_log_for_draft():
+                            logger.info(
+                                "Live draft activity detected. Going back to live draft."
+                            )
+                            self.set_file_and_scan(self.live_log_path)
+                    else:
+                        # We are already on the live log. Keep our tracker up to date.
+                        try:
+                            self._last_live_file_size = os.path.getsize(
+                                self.live_log_path
+                            )
+                            self._live_log_offset = self._last_live_file_size
+                        except Exception:
+                            pass
 
-            # 1. Safely execute file swaps on the background thread
+            # 1. Safely execute dataset loads on the background thread. Keep
+            # only the last choice when a user changes the filters rapidly.
+            new_dataset = None
+            try:
+                while not self._dataset_load_queue.empty():
+                    new_dataset = self._dataset_load_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+            if new_dataset:
+                self.loading = True
+                dataset_name = os.path.basename(new_dataset)
+                self.update_queue.put(
+                    {
+                        "status": "Reading card ratings...",
+                        "detail": (
+                            "Loading the selected 17Lands dataset and rebuilding "
+                            "the recommendation indexes. Large files can take a few seconds."
+                        ),
+                    }
+                )
+                success = False
+                error_text = None
+                try:
+                    self.scanner.retrieve_set_data(new_dataset)
+                    self.config.card_data.latest_dataset = dataset_name
+                    write_configuration(self.config)
+
+                    from src.card_logic import clear_deck_cache
+
+                    clear_deck_cache()
+                    success = True
+                except Exception as e:
+                    error_text = str(e)
+                    logger.error("Dataset load error: %s", e, exc_info=True)
+                finally:
+                    self.loading = False
+                    if success:
+                        self.update_queue.put("REFRESH")
+                    self.update_queue.put(
+                        {
+                            "event": "operation_complete",
+                            "operation": "dataset_load",
+                            "success": success,
+                            "status": (
+                                "Dataset ready"
+                                if success
+                                else f"Dataset load failed: {error_text or 'unknown error'}"
+                            ),
+                        }
+                    )
+
+            # 2. Safely execute file swaps on the background thread
             new_file = None
             try:
                 # Flush the queue to only process the very LAST click (prevents queue buildup)
@@ -157,7 +214,17 @@ class DraftOrchestrator(threading.Thread):
 
             if new_file:
                 self.loading = True
-                self.update_queue.put({"status": "Scanning Log..."})
+                self.update_queue.put(
+                    {
+                        "status": "Scanning draft log...",
+                        "detail": (
+                            "Reading the selected log and rebuilding packs, picks, "
+                            "and the card pool. Larger logs take longer."
+                        ),
+                    }
+                )
+                success = False
+                error_text = None
                 try:
                     self.scanner.set_arena_file(new_file)
 
@@ -171,17 +238,32 @@ class DraftOrchestrator(threading.Thread):
 
                     self.update_queue.put({"status": "Parsing Picks..."})
                     self.scanner.draft_data_search()
+                    success = True
                 except Exception as e:
-                    logger.error(f"Error processing file swap: {e}")
+                    error_text = str(e)
+                    logger.error("Error processing file swap: %s", e, exc_info=True)
                 finally:
                     self.loading = False
-                    self.update_queue.put("REFRESH")
+                    if success:
+                        self.update_queue.put("REFRESH")
+                    self.update_queue.put(
+                        {
+                            "event": "operation_complete",
+                            "operation": "log_scan",
+                            "success": success,
+                            "status": (
+                                "Draft log ready"
+                                if success
+                                else f"Draft log failed: {error_text or 'unknown error'}"
+                            ),
+                        }
+                    )
 
-            # 2. Check if file changed OR if a manual event was triggered
+            # 3. Check if file changed OR if a manual event was triggered
             if not self.loading and (
-                self._file_has_changed()
-                or self._force_full_scan_event.is_set()
+                self._force_full_scan_event.is_set()
                 or self._force_math_event.is_set()
+                or (not self.monitoring_paused and self._file_has_changed())
             ):
                 # Acquire lock briefly, do work, release
                 self.step_process()
@@ -244,33 +326,37 @@ class DraftOrchestrator(threading.Thread):
         return False
 
     def step_process(self):
-        if not self.loading and not self.monitoring_paused:
-            force = False
-            try:
-                # Check our flag safely on the background thread
-                force = self._force_full_scan_event.is_set()
-                if force:
-                    self._force_full_scan_event.clear()
+        if self.loading:
+            return
+        manual_request = (
+            self._force_full_scan_event.is_set()
+            or self._force_math_event.is_set()
+        )
+        if self.monitoring_paused and not manual_request:
+            return
 
-                log_changed = self.check_for_updates(force=force)
-                if log_changed or self._force_math_event.is_set():
-                    self._force_math_event.clear()
-                    self.update_queue.put("REFRESH")
-            except Exception as e:
-                logger.error(f"Logic Step Error: {e}")
-                if force:
-                    self.update_queue.put(
-                        {"event": "scan_complete", "success": False}
-                    )
-            else:
-                # A forced scan must always tell the UI that it finished, even
-                # when the log contains no new draft state and no REFRESH event
-                # was necessary. Otherwise the blocking loading overlay remains
-                # visible forever.
-                if force:
-                    self.update_queue.put(
-                        {"event": "scan_complete", "success": True}
-                    )
+        force = False
+        try:
+            # Check our flag safely on the background thread
+            force = self._force_full_scan_event.is_set()
+            if force:
+                self._force_full_scan_event.clear()
+
+            log_changed = self.check_for_updates(force=force)
+            if log_changed or self._force_math_event.is_set():
+                self._force_math_event.clear()
+                self.update_queue.put("REFRESH")
+        except Exception as e:
+            logger.error(f"Logic Step Error: {e}")
+            if force:
+                self.update_queue.put({"event": "scan_complete", "success": False})
+        else:
+            # A forced scan must always tell the UI that it finished, even
+            # when the log contains no new draft state and no REFRESH event
+            # was necessary. Otherwise the blocking loading overlay remains
+            # visible forever.
+            if force:
+                self.update_queue.put({"event": "scan_complete", "success": True})
 
     def check_for_updates(self, force=False):
         """

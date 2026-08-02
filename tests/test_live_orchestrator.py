@@ -112,6 +112,22 @@ def test_forced_scan_reports_failure(orchestrator):
     }
 
 
+def test_manual_scan_completes_while_monitoring_is_paused(orchestrator):
+    orchestrator.set_paused(True)
+    # Discard the status emitted by the pause action.
+    orchestrator.update_queue.get_nowait()
+    orchestrator.trigger_full_scan()
+    orchestrator.check_for_updates = MagicMock(return_value=False)
+
+    orchestrator.step_process()
+
+    orchestrator.check_for_updates.assert_called_once_with(force=True)
+    assert orchestrator.update_queue.get_nowait() == {
+        "event": "scan_complete",
+        "success": True,
+    }
+
+
 @patch("src.ui.orchestrator.time.sleep", return_value=None)
 def test_orchestrator_run_loop(mock_sleep, orchestrator):
     """Verify the run loop correctly consumes events and file swaps."""
@@ -166,3 +182,34 @@ def test_file_swap_queue_processing(orchestrator):
 
     # Verify scanner was updated
     orchestrator.scanner.set_arena_file.assert_called_with("historical_draft_2.log")
+
+
+@patch("src.ui.orchestrator.time.sleep", return_value=None)
+@patch("src.ui.orchestrator.write_configuration")
+@patch("src.card_logic.clear_deck_cache")
+def test_dataset_load_runs_in_background_and_reports_completion(
+    mock_clear_cache, mock_write, mock_sleep, orchestrator
+):
+    # Explicit user operations must still finish while automatic log monitoring
+    # is paused, otherwise the blocking overlay would never receive completion.
+    orchestrator.set_paused(True)
+    orchestrator.request_dataset_load("/sets/OTJ.json")
+    orchestrator._stop_event.is_set = MagicMock(side_effect=[False, True])
+
+    orchestrator.run()
+
+    orchestrator.scanner.retrieve_set_data.assert_called_once_with("/sets/OTJ.json")
+    assert orchestrator.config.card_data.latest_dataset == "OTJ.json"
+    mock_write.assert_called_once_with(orchestrator.config)
+    mock_clear_cache.assert_called_once()
+
+    messages = []
+    while not orchestrator.update_queue.empty():
+        messages.append(orchestrator.update_queue.get_nowait())
+    assert "REFRESH" in messages
+    assert {
+        "event": "operation_complete",
+        "operation": "dataset_load",
+        "success": True,
+        "status": "Dataset ready",
+    } in messages

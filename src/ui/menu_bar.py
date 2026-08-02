@@ -137,7 +137,10 @@ class AppMenuBar:
         if f:
             if hasattr(self.app_context, "loading_overlay"):
                 self.app_context.loading_overlay.show("Loading Draft Log")
-                self.app_context.loading_overlay.update_status("Queuing file...")
+                self.app_context.loading_overlay.update_status(
+                    "Preparing draft log...",
+                    "Reading picks and rebuilding packs and the card pool.",
+                )
             self.app_context.orchestrator.set_file_and_scan(f)
 
     def _read_player_log(self):
@@ -145,7 +148,10 @@ class AppMenuBar:
         if f:
             if hasattr(self.app_context, "loading_overlay"):
                 self.app_context.loading_overlay.show("Loading Player.log")
-                self.app_context.loading_overlay.update_status("Queuing file...")
+                self.app_context.loading_overlay.update_status(
+                    "Preparing Player.log...",
+                    "Scanning Arena's detailed log and reconstructing the current draft.",
+                )
             self.app_context.orchestrator.set_file_and_scan(f)
 
     def _locate_mtga_data(self):
