@@ -22,6 +22,9 @@ class DraftOrchestrator(threading.Thread):
         self._paused_event = threading.Event()
         self._force_math_event = threading.Event()
         self._force_full_scan_event = threading.Event()
+        self._scanner_swap_lock = threading.RLock()
+        self._live_scanner = None
+        self._practice_scanner = None
 
         self.daemon = True
         self.update_queue = queue.Queue()
@@ -119,10 +122,15 @@ class DraftOrchestrator(threading.Thread):
             if self.monitoring_paused:
                 time.sleep(0.5)
                 continue
+            # A real Arena draft always wins over the local practice sandbox.
+            if self.is_practice_mode and self._check_live_log_for_draft():
+                logger.info("Live draft activity detected. Ending practice mode.")
+                self.end_practice_session(interrupted=True)
+
             # Automatically snap back to the live draft log ONLY if a draft event is detected
             if getattr(self, "live_log_path", None) and os.path.exists(
                 self.live_log_path
-            ):
+            ) and not self.is_practice_mode:
                 if self.scanner.arena_file != self.live_log_path:
                     # We are looking at a past log. Check for actual live draft activity.
                     if self._check_live_log_for_draft():
@@ -180,6 +188,50 @@ class DraftOrchestrator(threading.Thread):
 
             # Yield to the UI thread between polls
             time.sleep(0.5)
+
+    @property
+    def is_practice_mode(self):
+        with self._scanner_swap_lock:
+            return self._practice_scanner is not None
+
+    def begin_practice_session(self, practice_scanner):
+        """Temporarily monitor an isolated scanner without mutating live draft state."""
+        if practice_scanner is None:
+            return False
+
+        with self._scanner_swap_lock:
+            if self._practice_scanner is not None:
+                return False
+            self._live_scanner = self.scanner
+            self._practice_scanner = practice_scanner
+            self.scanner = practice_scanner
+            self._last_file_size = -1
+
+        self.update_queue.put({"status": "Practice draft started"})
+        return True
+
+    def end_practice_session(self, interrupted=False):
+        """Restore the exact scanner that was watching Arena before practice."""
+        with self._scanner_swap_lock:
+            if self._practice_scanner is None:
+                return False
+            self.scanner = self._live_scanner
+            self._live_scanner = None
+            self._practice_scanner = None
+            self._last_file_size = -1
+
+        self.update_queue.put(
+            {
+                "event": "practice_interrupted" if interrupted else "practice_ended",
+                "status": (
+                    "Live draft detected — practice stopped"
+                    if interrupted
+                    else "Live monitoring restored"
+                ),
+            }
+        )
+        self.update_queue.put("REFRESH")
+        return True
 
     def _file_has_changed(self):
         """Returns True if the log file size has changed since the last scan.
@@ -267,6 +319,11 @@ class DraftOrchestrator(threading.Thread):
         self, target_set=None, target_format=None, target_user=None
     ):
         with self.scanner.lock:
+            # The practice scanner is preloaded with the user's active dataset.
+            # Keeping it isolated avoids changing the persisted live selection.
+            if self.is_practice_mode and self.scanner.set_data._dataset is not None:
+                return True
+
             event_set, _ = self.scanner.retrieve_current_limited_event()
             s_code = target_set or event_set
             if not s_code:

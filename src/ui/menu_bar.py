@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox
 from src import constants
 from src.ui.styles import Theme
 from src.configuration import write_configuration
+from src.ui.windows.draft_practice import DraftPracticeWindow
 from src.ui.windows.practice_dialog import PracticeDialog
 
 
@@ -45,6 +46,11 @@ class AppMenuBar:
         # --- TOOLS MENU ---
         tools_m = tkinter.Menu(m, tearoff=0)
         m.add_cascade(label="Tools", menu=tools_m)
+        tools_m.add_command(
+            label="Practice: Start Dummy Draft",
+            command=self._open_draft_practice,
+        )
+        tools_m.add_separator()
         tools_m.add_command(
             label="Practice: Generate Random Sealed Pool",
             command=lambda: PracticeDialog(
@@ -83,6 +89,20 @@ class AppMenuBar:
             custom_m.add_command(
                 label=name, command=lambda p=path: self._update_theme(new_custom=p)
             )
+
+    def _open_draft_practice(self):
+        existing = getattr(self.app_context, "draft_practice_window", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except tkinter.TclError:
+            pass
+
+        self.app_context.draft_practice_window = DraftPracticeWindow(
+            self.root, self.app_context
+        )
 
     def _update_theme(self, new_engine=None, new_palette=None, new_custom=None):
         s = self.config.settings

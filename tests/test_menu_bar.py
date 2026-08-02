@@ -96,6 +96,17 @@ def test_read_draft_log_cancelled(mock_filedialog, root, mock_app_context):
     mock_app_context.orchestrator.set_file_and_scan.assert_not_called()
 
 
+@patch("src.ui.menu_bar.DraftPracticeWindow")
+def test_open_draft_practice(mock_window, root, mock_app_context):
+    mock_app_context.draft_practice_window = None
+    menu_bar = AppMenuBar(root, mock_app_context)
+
+    menu_bar._open_draft_practice()
+
+    mock_window.assert_called_once_with(root, mock_app_context)
+    assert mock_app_context.draft_practice_window is mock_window.return_value
+
+
 @patch("src.ui.menu_bar.filedialog.askdirectory")
 @patch("src.ui.menu_bar.os.path.exists")
 @patch("src.ui.menu_bar.write_configuration")
