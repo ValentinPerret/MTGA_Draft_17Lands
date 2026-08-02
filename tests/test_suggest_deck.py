@@ -5,6 +5,7 @@ Validation for the Dynamic Deck Builder UI.
 
 import pytest
 import tkinter
+import time
 from unittest.mock import MagicMock, patch
 from src.ui.windows.suggest_deck import SuggestDeckPanel
 from src.configuration import Configuration
@@ -116,6 +117,36 @@ class TestSuggestDeckPanel:
 
             # Verify table has Etali
             assert panel.current_deck_list[0]["name"] == "Etali"
+
+    def test_builder_results_return_through_tk_main_thread(
+        self, root, mock_draft, mock_variants
+    ):
+        """The real worker must complete without making cross-thread Tk calls."""
+
+        def build_with_progress(*args):
+            progress_cb = args[4]
+            progress_cb({"status": "Analyzing deck pool..."})
+            progress_cb(
+                {
+                    "variant_label": "BG Consistent",
+                    "variant_data": mock_variants["BG Consistent"],
+                }
+            )
+            return mock_variants
+
+        with patch("src.card_logic.suggest_deck", side_effect=build_with_progress):
+            panel = SuggestDeckPanel(root, mock_draft, Configuration())
+            panel.refresh()
+
+            deadline = time.monotonic() + 2
+            while panel.is_building and time.monotonic() < deadline:
+                root.update()
+                time.sleep(0.01)
+
+            assert panel.is_building is False
+            assert panel.var_archetype.get() == "BG Consistent"
+            assert list(panel.suggestions) == ["BG Consistent", "BG Splash R"]
+            panel.sim_executor.shutdown(wait=True)
 
     def test_calculate_suggestions_not_enough_cards(self, root, mock_draft):
         """Verify that having fewer than 22 spells cleanly exits the builder."""

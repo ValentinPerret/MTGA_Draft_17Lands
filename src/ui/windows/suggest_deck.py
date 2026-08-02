@@ -9,6 +9,7 @@ Includes a 10,000 game Monte Carlo Simulation for elite pro-level analysis.
 import tkinter
 from tkinter import ttk
 from typing import Dict, Any, List
+import queue
 import random
 import requests
 import urllib.parse
@@ -49,6 +50,9 @@ class SuggestDeckPanel(ttk.Frame):
 
         self.image_executor = ThreadPoolExecutor(max_workers=4)
         self.sim_executor = ThreadPoolExecutor(max_workers=1)
+        self._builder_results = queue.Queue()
+        self._builder_poll_id = None
+        self._builder_generation = 0
         self.hand_images = []
         self.hand_frames = []
 
@@ -883,6 +887,8 @@ class SuggestDeckPanel(ttk.Frame):
             return
 
         self.is_building = True
+        self._builder_generation += 1
+        builder_generation = self._builder_generation
         self.var_archetype.set("Initializing AI Builder...")
         self._update_dropdown_options(["Initializing AI Builder..."])
         self._clear_table()
@@ -902,33 +908,9 @@ class SuggestDeckPanel(ttk.Frame):
         dataset_name = self.configuration.card_data.latest_dataset
 
         def _progress_cb(msg):
-            if not self.winfo_exists():
-                return
-            if "status" in msg:
-                if not self.suggestions:
-                    self.after(0, lambda: self.var_archetype.set(msg["status"]))
-                if getattr(self, "app_context", None) and hasattr(
-                    self.app_context, "loading_overlay"
-                ):
-                    self.after(
-                        0,
-                        lambda: self.app_context.loading_overlay.update_status(
-                            msg["status"]
-                        ),
-                    )
-            elif "variant_label" in msg:
-                lbl = msg["variant_label"]
-                vd = msg["variant_data"]
-
-                def _update_ui():
-                    self.suggestions[lbl] = vd
-                    self.incremental_labels.append(lbl)
-                    self._update_dropdown_options(self.incremental_labels)
-
-                    if len(self.incremental_labels) == 1:
-                        self._on_deck_selection_change(lbl)
-
-                self.after(0, _update_ui)
+            # This callback runs inside the builder worker. Tk calls made from
+            # here can deadlock on macOS, so only pass plain data to the UI thread.
+            self._builder_results.put((builder_generation, "progress", msg))
 
         def _worker():
             try:
@@ -942,11 +924,66 @@ class SuggestDeckPanel(ttk.Frame):
                     _progress_cb,
                     dataset_name,
                 )
-                self.after(0, lambda: self._finalize_build(raw_results))
-            except Exception as e:
-                self.after(0, lambda: self._handle_builder_error(str(e)))
+                self._builder_results.put(
+                    (builder_generation, "complete", raw_results)
+                )
+            except Exception as error:
+                self._builder_results.put(
+                    (builder_generation, "error", str(error))
+                )
 
+        self._schedule_builder_poll()
         self.sim_executor.submit(_worker)
+
+    def _schedule_builder_poll(self):
+        """Schedule the sole main-thread consumer for builder worker events."""
+        if self._builder_poll_id is None:
+            self._builder_poll_id = self.after_idle(self._poll_builder_results)
+
+    def _poll_builder_results(self):
+        """Apply queued builder progress and results on Tk's main thread."""
+        self._builder_poll_id = None
+
+        if not self.winfo_exists():
+            return
+
+        while True:
+            try:
+                generation, event_type, payload = self._builder_results.get_nowait()
+            except queue.Empty:
+                break
+
+            if generation != self._builder_generation:
+                continue
+
+            if event_type == "progress":
+                self._apply_builder_progress(payload)
+            elif event_type == "complete":
+                self._finalize_build(payload)
+            elif event_type == "error":
+                self._handle_builder_error(payload)
+
+        if self.is_building:
+            self._builder_poll_id = self.after(50, self._poll_builder_results)
+
+    def _apply_builder_progress(self, msg):
+        """Render one builder progress event; always called by the Tk thread."""
+        if "status" in msg:
+            if not self.suggestions:
+                self.var_archetype.set(msg["status"])
+            if getattr(self, "app_context", None) and hasattr(
+                self.app_context, "loading_overlay"
+            ):
+                self.app_context.loading_overlay.update_status(msg["status"])
+        elif "variant_label" in msg:
+            label = msg["variant_label"]
+            variant_data = msg["variant_data"]
+            self.suggestions[label] = variant_data
+            self.incremental_labels.append(label)
+            self._update_dropdown_options(self.incremental_labels)
+
+            if len(self.incremental_labels) == 1:
+                self._on_deck_selection_change(label)
 
     def _finalize_build(self, sorted_decks):
         self.is_building = False
