@@ -20,6 +20,7 @@ redistributing data or operating a bulk-data workflow.
 - [Run Steps: Python (Windows / macOS / Linux)](#run-steps-python-windows--macos--linux)
 - [Marquee Features](#marquee-features)
 - [Contextual Draft Copilot](#contextual-draft-copilot)
+- [Post-Match Game Review](#post-match-game-review)
 - [UI Navigation & Tabs](#ui-navigation--tabs)
 - [Settings & Preferences](#settings--preferences)
 - [File Locations](#file-locations)
@@ -88,6 +89,7 @@ macOS actively quarantines unsigned apps downloaded from the internet. To run th
 - **Automated Cloud Datasets:** The application uses a custom Cloud ETL Pipeline that compiles and distributes the latest 17Lands telemetry every day. When you open the app, it instantly syncs the data for active Arena events in the background so you never have to manually scrape data again. You can view the live dataset schedule [here](https://unrealities.github.io/MTGA_Draft_17Lands/).
 - **Zero-Day Card Recognition:** Alternate art cards and basic lands now instantly display their correct names on release day by dynamically querying your local MTG Arena SQLite database for unknown IDs, completely eliminating the wait for third-party API updates.
 - **Mini Mode:** Click the `Mini Mode` button to hide the main dashboard and display a compact, draggable, always-on-top window. Perfect for single-monitor setups or playing seamlessly over the Arena client.
+- **Post-Match Game Review:** Reconstructs completed Limited games from Arena's detailed log, highlights evidence-backed mistakes and strengths, and tracks recurring coaching themes over time. A manual local Codex pass can review richer combat and sequencing decisions.
 - **Dynamic Columns:** You can customize the columns displayed in any table (Pack, Card Pool, Compare) by **Right-Clicking the column header**. Add specific 17Lands stats or remove ones you don't need. The app remembers your layout automatically.
 - **Themes & Mana Flairs:** Under the `Theme` menu, you can select custom "Mana Flairs" (Forest, Island, Swamp, Mountain, Plains, Wastes) or fall back to your Native OS System theme.
 
@@ -130,6 +132,26 @@ privacy, routing, testing, limitations, and troubleshooting details.
 
 ---
 
+## Post-Match Game Review
+
+Open the **Game Review** tab after a Limited game and click **Scan Player.log**.
+The app reconstructs the decisions Arena recorded, immediately runs conservative
+checks, and shows a chronological action timeline. Select a completed match and click
+**Analyze with Codex** for a deeper, manual review of observable combat, sequencing,
+mana, and interaction decisions. The review can take up to two minutes and runs in
+the background without freezing the interface.
+
+The **Progress** view tracks your Limited record, number of Codex-reviewed games,
+recent trend, and recurring focus areas. Only a hashed match key and the structured
+coaching result are stored locally. Raw logs, account identifiers, opponent names,
+and machine paths are not saved or sent to Codex. Findings marked **possible** reflect
+hidden information or Arena state that the log cannot fully represent.
+
+See [Game Review architecture and limitations](docs/game-review.md) for the evidence
+model, privacy boundaries, and troubleshooting.
+
+---
+
 ## UI Navigation & Tabs
 
 The application is structured into a collapsible Live Dashboard and several functional workspace tabs:
@@ -144,6 +166,7 @@ The application is structured into a collapsible Live Dashboard and several func
 - **Datasets:** Manage, download, and update 17Lands card data locally. Provides detailed download summaries, including exactly how many MTGA cards were successfully matched with 17Lands telemetry data. Choose a **Time Period** (All Time, Latest Event, Last Week, etc.) to match 17Lands, and use **Clear Set History** to delete old downloaded datasets and re-sync a clean copy if loading slows down.
 - **Card Pool:** View the cards you have drafted. Features a **"Switch to Visual View"** button to stack your cards into mana curve columns exactly like MTG Arena does.
 - **Deck Builder:** A fully interactive deck construction environment combining Auto-Generation and manual Custom building. Features a 1-click **Auto-Lands** button, a sleek basics toolbar, and live deck size validation.
+- **Game Review:** Scan completed Limited games, inspect conservative findings and the recorded action timeline, request a deeper local Codex review, and monitor recurring improvement areas.
 - **Comparisons:** Search and add multiple cards to directly compare their stats side-by-side.
 - **Tier Lists:** Import and manage custom tier lists from the 17Lands API.
 
@@ -181,6 +204,7 @@ The application looks for the configuration file in the following order:
 - Downloaded card data is stored in the `Sets` folder.
 - Custom Tier lists are stored in the `Tier` folder.
 - Application debug logs are stored in the `Debug` folder, and draft logs are in the `Logs` folder.
+- Game Review history is stored locally in `GameReviews/history.json` beside the system configuration file. It contains hashed match keys and structured coaching summaries, never the raw Arena log.
 
 ---
 

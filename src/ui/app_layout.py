@@ -19,6 +19,7 @@ from src.ui.windows.custom_deck import CustomDeckPanel
 from src.ui.windows.compare import ComparePanel
 from src.ui.windows.download import DownloadWindow
 from src.ui.windows.tier_list_panel import TierListWindow
+from src.ui.windows.game_review import GameReviewPanel
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class AppLayoutManager:
         self.panel_compare = None
         self.panel_data = None
         self.panel_tiers = None
+        self.panel_game_review = None
 
     def build(self):
         """Constructs the primary shell (TopBar, Dashboard Pane, Tabs Pane)."""
@@ -159,12 +161,16 @@ class AppLayoutManager:
         self.panel_tiers = TierListWindow(
             self.notebook, self.config, self.app._refresh_ui_data
         )
+        self.panel_game_review = GameReviewPanel(
+            self.notebook, self.app.orchestrator.scanner, self.config
+        )
 
         self.notebook.add(self.panel_data, text="Datasets")
         self.notebook.add(self.panel_taken, text="Card pool")
         self.notebook.add(self.panel_suggest, text="Deck builder")
         self.notebook.add(self.panel_custom, text="Custom deck")
         self.notebook.add(self.panel_compare, text="Comparisons")
+        self.notebook.add(self.panel_game_review, text="Game review")
         self.notebook.add(self.panel_tiers, text="Tier lists")
 
         self._bind_tool_card_previews()
@@ -220,6 +226,7 @@ class AppLayoutManager:
                         self.panel_suggest,
                         self.panel_custom,
                         self.panel_compare,
+                        self.panel_game_review,
                         self.panel_tiers,
                     )
                     if str(panel) == str(selected)
