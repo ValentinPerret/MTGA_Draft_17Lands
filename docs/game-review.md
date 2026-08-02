@@ -9,8 +9,9 @@ post-match coaching workflow for Limited games.
 2. Finish a Premier Draft, Quick Draft, Traditional Draft, Sealed, or Cube game.
 3. Open **Game Review** and click **Scan Player.log**.
 4. Select a completed game to inspect the conservative review and action timeline.
-5. Optionally click **Analyze with Codex** for a deeper local review.
-6. Use **Progress** to track recurring categories and the finding rate across reviewed
+5. Open **Deck Changes** to see whether the submitted list should change.
+6. Optionally click **Analyze Game + Deck** for a deeper local review.
+7. Use **Progress** to track recurring categories and the finding rate across reviewed
    games.
 
 Scanning and Codex analysis both run on background threads. The status line explains
@@ -20,8 +21,9 @@ the active operation; a Codex review can take up to two minutes.
 
 The parser reconstructs only state Arena recorded: the player's visible hand, both
 battlefields, life totals, legal action requests, chosen responses, turn/phase state,
-and game result. Local card datasets provide names and oracle text for recorded Arena
-card identifiers.
+game result, and the exact submitted main deck and sideboard. Local card datasets
+provide names, oracle text, mana value, color, and available 17Lands context for
+recorded Arena card identifiers.
 
 The immediate review intentionally makes few claims. It currently detects unusually
 risky opening-hand keeps, possible missed land drops, and timeout losses. A deeper
@@ -30,6 +32,21 @@ combat, interaction, and resource-use opportunities. Every finding includes a ci
 turn, evidence, an alternative line, a reusable practice tip, certainty, and
 confidence.
 
+### Deck-change evidence
+
+The exact submitted main deck is reduced to a one-way deck fingerprint so games with
+the same list can be compared. The immediate analyzer can flag structural issues such
+as playing more than 40 cards or an unusually low land count. It waits for repeated
+same-deck evidence before suggesting changes for mana screw, flood, or cards that
+remain stranded in hand. Additions must be present in the recorded sideboard, except
+for basic lands that are freely available in Limited.
+
+The Codex pass receives the current submitted list, sideboard, and up to eight bounded
+same-deck summaries. It is explicitly instructed—and its output is validated—not to
+recommend a cut merely because the game was lost, the card was not drawn, or a
+gameplay decision was poor. Returning no deck change is a valid and often preferable
+result.
+
 The tool distinguishes **confirmed**, **likely**, and **possible** findings. Seeing a
 legal action in the log does not by itself mean that action was strategically better.
 
@@ -37,6 +54,8 @@ legal action in the log does not by itself mean that action was strategically be
 
 - Raw `Player.log` content is parsed in memory and is never copied into review history.
 - Match identifiers are converted to short SHA-256-based keys before persistence.
+- Submitted deck composition is represented in history by a one-way fingerprint;
+  full main-deck and sideboard lists are parsed in memory rather than persisted.
 - Account identifiers, opponent names, local paths, and unrelated history are neither
   stored nor included in the Codex request.
 - The Codex payload is bounded to observable decisions plus the local card definitions
@@ -57,6 +76,9 @@ legal action in the log does not by itself mean that action was strategically be
   available.
 - The coaching is advisory. It cannot guarantee an optimal line and never clicks or
   controls Arena.
+- Deck changes can expose correlations, not prove causation. Synergy, matchup, and
+  small-sample effects may still make a suggested swap wrong; certainty and evidence
+  counts are displayed for that reason.
 
 If no games appear, verify the selected `Player.log` path in Preferences and confirm
 that Detailed Logs remained enabled for the entire game.

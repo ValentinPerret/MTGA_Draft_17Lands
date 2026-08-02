@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from src.game_review.analyzer import analyze_game
 from src.game_review.codex_reviewer import CodexGameReviewer, build_game_review_payload
+from src.game_review.deck_advisor import recommend_deck_changes
+from src.game_review.models import GameDecision, GameIndicators, GameSnapshot
 from src.game_review.parser import ArenaGameLogParser, LocalCardCatalog
 from src.game_review.store import GameReviewStore, match_key
 
@@ -24,12 +26,27 @@ def _write_limited_game_log(tmp_path, *, play_land=True):
                         "name": "Island",
                         "types": ["Land", "Basic"],
                         "mana_cost": "",
+                        "cmc": 0,
+                        "colors": ["U"],
+                        "deck_colors": {"All Decks": {"gihwr": 50.0}},
                     },
                     "20": {
                         "name": "Careful Researcher",
                         "types": ["Creature"],
                         "mana_cost": "{1}{U}",
+                        "cmc": 2,
+                        "colors": ["U"],
                         "oracle_text": "When this enters, surveil 1.",
+                        "deck_colors": {"All Decks": {"gihwr": 54.0}},
+                    },
+                    "30": {
+                        "name": "Sideboard Adept",
+                        "types": ["Creature"],
+                        "mana_cost": "{U}",
+                        "cmc": 1,
+                        "colors": ["U"],
+                        "oracle_text": "When this enters, draw then discard.",
+                        "deck_colors": {"All Decks": {"gihwr": 57.0}},
                     },
                 }
             }
@@ -60,6 +77,12 @@ def _write_limited_game_log(tmp_path, *, play_land=True):
             "type": "GREMessageType_ConnectResp",
             "systemSeatIds": [1],
             "msgId": 1,
+            "connectResp": {
+                "deckMessage": {
+                    "deckCards": [10] * 17 + [20] * 23,
+                    "sideboardCards": [30] * 15,
+                }
+            },
         }
     )
     opening = _gre(
@@ -215,6 +238,11 @@ def test_parser_reconstructs_completed_limited_game(tmp_path):
     assert game.actions[0].action == "Play"
     assert game.actions[0].card.name == "Island"
     assert game.decisions[0].snapshot.hand[1].name == "Careful Researcher"
+    assert len(game.deck_cards) == 40
+    assert len(game.sideboard_cards) == 15
+    assert sum("Land" in card.types for card in game.deck_cards) == 17
+    assert game.sideboard_cards[0].name == "Sideboard Adept"
+    assert len(game.deck_fingerprint) == 20
 
 
 def test_analyzer_marks_risky_keep_and_possible_missed_land(tmp_path):
@@ -238,6 +266,9 @@ def test_store_hashes_match_identity_and_tracks_progress(tmp_path):
     assert "private-match-id" not in raw_history
     assert store.progress().total_games == 1
     assert store.progress().wins == 1
+    assert stored.deck_fingerprint == game.deck_fingerprint
+    assert stored.indicators.deck_size == 40
+    assert len(store.same_deck_games(game.deck_fingerprint)) == 1
 
 
 def test_codex_payload_is_minimized_and_has_local_card_context(tmp_path):
@@ -250,6 +281,56 @@ def test_codex_payload_is_minimized_and_has_local_card_context(tmp_path):
     assert "Careful Researcher" in serialized
     assert "surveil 1" in serialized
     assert payload["decisions"][0]["decision_type"] == "mulligan"
+    assert sum(card["count"] for card in payload["submitted_deck"]) == 40
+    assert sum(card["count"] for card in payload["sideboard"]) == 15
+    assert payload["same_deck_games_seen"] == 1
+
+
+def test_repeated_same_deck_mana_screw_can_recommend_one_more_land(tmp_path):
+    game = _parse_fixture(tmp_path)
+    island = game.deck_cards[0]
+    spell = next(card for card in game.deck_cards if "Land" not in card.types)
+    game = game.model_copy(
+        update={
+            "decisions": [
+                GameDecision(
+                    kind="action",
+                    snapshot=GameSnapshot(
+                        turn=1,
+                        phase="Main1",
+                        active_seat=game.user_seat,
+                        hand=[spell],
+                        player_battlefield=[island],
+                    ),
+                ),
+                GameDecision(
+                    kind="action",
+                    snapshot=GameSnapshot(
+                        turn=3,
+                        phase="Main1",
+                        active_seat=game.user_seat,
+                        hand=[spell],
+                        player_battlefield=[island],
+                    ),
+                ),
+            ]
+        }
+    )
+
+    changes = recommend_deck_changes(
+        game, [GameIndicators(mana_screw_signal=True, land_count=17, deck_size=40)]
+    )
+
+    assert len(changes) == 1
+    assert changes[0].cut_card == "Careful Researcher"
+    assert changes[0].add_card == "Island"
+    assert changes[0].evidence_games == 2
+
+
+def test_single_loss_does_not_trigger_result_oriented_deck_change(tmp_path):
+    game = _parse_fixture(tmp_path).model_copy(update={"result": "Loss"})
+
+    assert recommend_deck_changes(game) == []
 
 
 def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
@@ -276,6 +357,21 @@ def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
                 "source": "codex",
             }
         ],
+        "deck_changes": [
+            {
+                "cut_card": "Careful Researcher",
+                "add_card": "Sideboard Adept",
+                "quantity": 1,
+                "priority": "low",
+                "certainty": "possible",
+                "confidence": 0.68,
+                "evidence_games": 1,
+                "evidence": "The exact submitted list contains a lower-curve sideboard option.",
+                "rationale": "The swap can be tested without changing the deck's colors.",
+                "expected_effect": "A slightly lower curve at a small power tradeoff.",
+                "source": "codex",
+            }
+        ],
     }
     captured = {}
 
@@ -283,6 +379,8 @@ def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
         captured["command"] = command
         captured["prompt"] = kwargs["input"]
         captured["env"] = kwargs["env"]
+        schema_path = Path(command[command.index("--output-schema") + 1])
+        captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
         output_path = Path(command[command.index("--output-last-message") + 1])
         output_path.write_text(json.dumps(result), encoding="utf-8")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -298,3 +396,8 @@ def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
     assert "Player.log" not in captured["prompt"]
     assert "private-match-id" not in captured["prompt"]
     assert review.findings[0].source == "codex"
+    assert review.deck_changes[0].add_card == "Sideboard Adept"
+
+    schema_path = Path(command[command.index("--output-schema") + 1])
+    assert schema_path.name == "schema.json"
+    assert "deck_changes" in captured["schema"]["required"]

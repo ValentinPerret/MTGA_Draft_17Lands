@@ -141,6 +141,11 @@ checks, and shows a chronological action timeline. Select a completed match and 
 mana, and interaction decisions. The review can take up to two minutes and runs in
 the background without freezing the interface.
 
+Arena also records the exact submitted main deck and sideboard. The **Deck Changes**
+view uses those lists to suggest concrete cuts and additions when construction or
+repeated same-deck evidence supports a change. A single loss, an undrawn card, or a
+gameplay mistake is never enough by itself to trigger a cut.
+
 The **Progress** view tracks your Limited record, number of Codex-reviewed games,
 recent trend, and recurring focus areas. Only a hashed match key and the structured
 coaching result are stored locally. Raw logs, account identifiers, opponent names,
@@ -166,7 +171,7 @@ The application is structured into a collapsible Live Dashboard and several func
 - **Datasets:** Manage, download, and update 17Lands card data locally. Provides detailed download summaries, including exactly how many MTGA cards were successfully matched with 17Lands telemetry data. Choose a **Time Period** (All Time, Latest Event, Last Week, etc.) to match 17Lands, and use **Clear Set History** to delete old downloaded datasets and re-sync a clean copy if loading slows down.
 - **Card Pool:** View the cards you have drafted. Features a **"Switch to Visual View"** button to stack your cards into mana curve columns exactly like MTG Arena does.
 - **Deck Builder:** A fully interactive deck construction environment combining Auto-Generation and manual Custom building. Features a 1-click **Auto-Lands** button, a sleek basics toolbar, and live deck size validation.
-- **Game Review:** Scan completed Limited games, inspect conservative findings and the recorded action timeline, request a deeper local Codex review, and monitor recurring improvement areas.
+- **Game Review:** Scan completed Limited games, inspect conservative findings and the recorded action timeline, review evidence-linked deck changes from the exact submitted deck and sideboard, request a deeper local Codex review, and monitor recurring improvement areas.
 - **Comparisons:** Search and add multiple cards to directly compare their stats side-by-side.
 - **Tier Lists:** Import and manage custom tier lists from the 17Lands API.
 

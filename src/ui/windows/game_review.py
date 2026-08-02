@@ -13,6 +13,7 @@ from typing import Dict, Optional
 from src import constants
 from src.game_review.analyzer import analyze_game
 from src.game_review.codex_reviewer import CodexGameReviewError, CodexGameReviewer
+from src.game_review.deck_advisor import build_game_indicators
 from src.game_review.parser import ArenaGameLogParser, LocalCardCatalog
 from src.game_review.store import GameReviewStore, match_key
 from src.ui.components import AutoScrollbar
@@ -54,6 +55,7 @@ class GameReviewPanel(ttk.Frame):
         self._scan_running = False
         self._review_running = False
         self._review_wrap_labels = []
+        self._deck_wrap_labels = []
         self._build_ui()
         self._poll_id = self.after(100, self._poll_results)
         self._render_progress()
@@ -88,7 +90,7 @@ class GameReviewPanel(ttk.Frame):
 
         self.btn_codex = ttk.Button(
             header,
-            text="Analyze with Codex",
+            text="Analyze Game + Deck",
             bootstyle="success",
             command=self._analyze_selected,
             state="disabled",
@@ -158,14 +160,18 @@ class GameReviewPanel(ttk.Frame):
 
         self.review_tab = ttk.Frame(self.detail_notebook)
         self.timeline_tab = ttk.Frame(self.detail_notebook, padding=Theme.scaled_val(8))
+        self.deck_tab = ttk.Frame(self.detail_notebook)
         self.progress_tab = ttk.Frame(self.detail_notebook, padding=Theme.scaled_val(12))
         self.detail_notebook.add(self.review_tab, text=" Review ")
         self.detail_notebook.add(self.timeline_tab, text=" Timeline ")
+        self.detail_notebook.add(self.deck_tab, text=" Deck Changes ")
         self.detail_notebook.add(self.progress_tab, text=" Progress ")
 
         self._build_review_canvas()
         self._build_timeline()
+        self._build_deck_changes()
         self._build_progress()
+        self._render_deck_changes(None, None, None, False)
 
     def _build_review_canvas(self):
         self.review_tab.rowconfigure(0, weight=1)
@@ -231,6 +237,34 @@ class GameReviewPanel(ttk.Frame):
         self.timeline_tree.configure(yscrollcommand=timeline_scroll.set)
         self.timeline_tree.grid(row=1, column=0, sticky="nsew")
         timeline_scroll.grid(row=1, column=1, sticky="ns")
+
+    def _build_deck_changes(self):
+        self.deck_tab.rowconfigure(0, weight=1)
+        self.deck_tab.columnconfigure(0, weight=1)
+        self.deck_canvas = tkinter.Canvas(
+            self.deck_tab, highlightthickness=0, bg=Theme.BG_PRIMARY
+        )
+        deck_scroll = AutoScrollbar(
+            self.deck_tab, orient="vertical", command=self.deck_canvas.yview
+        )
+        self.deck_canvas.configure(yscrollcommand=deck_scroll.set)
+        self.deck_canvas.grid(row=0, column=0, sticky="nsew")
+        deck_scroll.grid(row=0, column=1, sticky="ns")
+        self.deck_content = ttk.Frame(
+            self.deck_canvas, padding=Theme.scaled_val(14)
+        )
+        self.deck_window = self.deck_canvas.create_window(
+            (0, 0), window=self.deck_content, anchor="nw"
+        )
+        self.deck_content.bind(
+            "<Configure>",
+            lambda event: self.deck_canvas.configure(
+                scrollregion=self.deck_canvas.bbox("all")
+            ),
+        )
+        self.deck_canvas.bind("<Configure>", self._resize_deck_canvas)
+        bind_scroll(self.deck_canvas, self.deck_canvas.yview_scroll)
+        bind_scroll(self.deck_content, self.deck_canvas.yview_scroll)
 
     def _build_progress(self):
         self.progress_tab.columnconfigure((0, 1, 2), weight=1)
@@ -316,9 +350,36 @@ class GameReviewPanel(ttk.Frame):
         def worker():
             try:
                 games = self.parser.parse(path)
+                completed_games = [game for game in games if game.completed]
+                parsed_keys = {
+                    match_key(game.match_id, game.game_number)
+                    for game in completed_games
+                }
+                stored_before_scan = self.store.load().games
                 for game in games:
                     if game.completed:
-                        self.store.upsert_game(game, analyze_game(game))
+                        key = match_key(game.match_id, game.game_number)
+                        parsed_prior = [
+                            build_game_indicators(other)
+                            for other in completed_games
+                            if other.deck_fingerprint
+                            and other.deck_fingerprint == game.deck_fingerprint
+                            and match_key(other.match_id, other.game_number) != key
+                        ]
+                        historical_prior = [
+                            stored.indicators
+                            for stored in stored_before_scan
+                            if stored.deck_fingerprint
+                            and stored.deck_fingerprint == game.deck_fingerprint
+                            and stored.match_key != key
+                            and stored.match_key not in parsed_keys
+                        ][:8]
+                        self.store.upsert_game(
+                            game,
+                            analyze_game(
+                                game, [*parsed_prior, *historical_prior][:19]
+                            ),
+                        )
                 self._results.put(("scan", token, games, ""))
             except Exception as error:
                 self._results.put(("scan", token, [], str(error)))
@@ -428,8 +489,10 @@ class GameReviewPanel(ttk.Frame):
             if stored and stored.codex_review
             else (stored.deterministic_review if stored else None)
         )
-        self._render_review(review, game, bool(stored and stored.codex_review))
+        from_codex = bool(stored and stored.codex_review)
+        self._render_review(review, game, from_codex)
         self._render_timeline(game)
+        self._render_deck_changes(review, game, stored, from_codex)
         can_review = bool(
             game
             and game.completed
@@ -453,6 +516,13 @@ class GameReviewPanel(ttk.Frame):
         for widget in self.review_content.winfo_children():
             widget.destroy()
         self._review_wrap_labels = []
+
+    def _resize_deck_canvas(self, event):
+        self.deck_canvas.itemconfigure(self.deck_window, width=event.width)
+        wrap = max(280, event.width - Theme.scaled_val(70))
+        for label in self._deck_wrap_labels:
+            if label.winfo_exists():
+                label.configure(wraplength=wrap)
 
     def _render_review(self, review, game, from_codex: bool):
         self._clear_review()
@@ -562,6 +632,126 @@ class GameReviewPanel(ttk.Frame):
                 values=(action.turn or "—", action.phase, action_text, action.detail),
             )
 
+    def _render_deck_changes(self, review, game, stored, from_codex: bool):
+        for widget in self.deck_content.winfo_children():
+            widget.destroy()
+        self._deck_wrap_labels = []
+
+        indicators = build_game_indicators(game) if game else (
+            stored.indicators if stored else None
+        )
+        fingerprint = game.deck_fingerprint if game else (
+            stored.deck_fingerprint if stored else ""
+        )
+        sample_size = 1 + len(
+            self.store.same_deck_games(
+                fingerprint,
+                exclude_key=stored.match_key if stored else "",
+            )
+        ) if fingerprint else 0
+
+        ttk.Label(
+            self.deck_content,
+            text="DECK CHANGES",
+            font=Theme.scaled_font(14, "bold"),
+            bootstyle="primary",
+        ).pack(anchor="w")
+        if indicators and indicators.deck_size:
+            ttk.Label(
+                self.deck_content,
+                text=(
+                    f"Submitted: {indicators.deck_size} cards • "
+                    f"{indicators.land_count} lands • "
+                    f"{indicators.sideboard_size} sideboard • "
+                    f"{sample_size} same-deck game(s)"
+                ),
+                font=Theme.scaled_font(9, "bold"),
+                bootstyle="secondary",
+            ).pack(anchor="w", pady=(2, 12))
+        else:
+            label = ttk.Label(
+                self.deck_content,
+                text="The submitted deck list was not present in this historical log segment.",
+                justify="left",
+                bootstyle="secondary",
+            )
+            label.pack(anchor="w", fill="x", pady=(8, 16))
+            self._deck_wrap_labels.append(label)
+
+        changes = list(review.deck_changes) if review else []
+        if not changes:
+            message = (
+                "No deck change is justified by the recorded games. Keep the list for now; "
+                "a gameplay mistake or a single loss is not evidence that a card should be cut."
+                if from_codex
+                else "No automatic deck change is justified yet. Analyze Game + Deck to compare "
+                "the exact submitted list, sideboard, observable decisions, and prior games with this deck."
+            )
+            label = ttk.Label(
+                self.deck_content,
+                text=message,
+                font=Theme.scaled_font(11),
+                justify="left",
+                wraplength=Theme.scaled_val(680),
+                bootstyle="success" if from_codex else "info",
+            )
+            label.pack(anchor="w", fill="x", pady=Theme.scaled_val((8, 16)))
+            self._deck_wrap_labels.append(label)
+        else:
+            for index, change in enumerate(changes, start=1):
+                frame = ttk.Labelframe(
+                    self.deck_content,
+                    text=f" {index}. {change.priority.upper()} PRIORITY ",
+                    padding=Theme.scaled_val(12),
+                )
+                frame.pack(fill="x", pady=Theme.scaled_val((0, 12)))
+                swap = f"CUT  {change.quantity}× {change.cut_card}"
+                if change.add_card:
+                    swap += f"\nADD  {change.quantity}× {change.add_card}"
+                ttk.Label(
+                    frame,
+                    text=swap,
+                    font=Theme.scaled_font(12, "bold"),
+                    bootstyle="warning",
+                    justify="left",
+                ).pack(anchor="w", pady=(0, 7))
+                metadata = ttk.Label(
+                    frame,
+                    text=(
+                        f"{change.certainty.upper()} • {change.confidence:.0%} CONFIDENCE • "
+                        f"SUPPORTED BY {change.evidence_games} GAME(S)"
+                    ),
+                    font=Theme.scaled_font(8, "bold"),
+                    bootstyle="secondary",
+                )
+                metadata.pack(anchor="w", pady=(0, 6))
+                for title, text in (
+                    ("Evidence", change.evidence),
+                    ("Why", change.rationale),
+                    ("Expected effect", change.expected_effect),
+                ):
+                    label = ttk.Label(
+                        frame,
+                        text=f"{title}: {text}",
+                        justify="left",
+                        wraplength=Theme.scaled_val(650),
+                    )
+                    label.pack(anchor="w", fill="x", pady=2)
+                    self._deck_wrap_labels.append(label)
+
+        note = ttk.Label(
+            self.deck_content,
+            text=(
+                "Deck advice is intentionally conservative: it uses the submitted list and "
+                "same-deck evidence, never cards you simply failed to draw."
+            ),
+            justify="left",
+            wraplength=Theme.scaled_val(680),
+            bootstyle="secondary",
+        )
+        note.pack(anchor="w", fill="x", pady=(4, 10))
+        self._deck_wrap_labels.append(note)
+
     def _render_progress(self):
         progress = self.store.progress()
         win_rate = progress.wins / progress.total_games if progress.total_games else 0
@@ -592,15 +782,19 @@ class GameReviewPanel(ttk.Frame):
         if not game or self._review_running:
             return
         review_key = self._selected_key
+        prior_games = self.store.same_deck_games(
+            game.deck_fingerprint, exclude_key=review_key
+        )
         self._review_running = True
         self._task_token += 1
         token = self._task_token
-        self.btn_codex.configure(state="disabled", text="Analyzing…")
+        self.btn_codex.configure(state="disabled", text="Analyzing Game + Deck…")
         self.btn_scan.configure(state="disabled")
         self.lbl_status.configure(
             text=(
                 "Local Codex is comparing your choices with the recorded board states. "
-                "This can take up to two minutes; the app remains responsive…"
+                f"It is also comparing the submitted deck with {len(prior_games)} prior "
+                "same-deck game(s). This can take up to two minutes; the app remains responsive…"
             ),
             bootstyle="info",
         )
@@ -614,6 +808,7 @@ class GameReviewPanel(ttk.Frame):
                         float(self.configuration.model_assistance.request_timeout_seconds),
                     ),
                     model=self.configuration.model_assistance.model,
+                    prior_games=prior_games,
                 )
                 self._results.put(("review", token, (review_key, review), ""))
             except CodexGameReviewError as error:
@@ -628,7 +823,7 @@ class GameReviewPanel(ttk.Frame):
     def _apply_codex_review(self, result, error: str):
         review_key, review = result
         self._review_running = False
-        self.btn_codex.configure(text="Analyze with Codex")
+        self.btn_codex.configure(text="Analyze Game + Deck")
         self.btn_scan.configure(state="normal")
         if error:
             self.lbl_status.configure(

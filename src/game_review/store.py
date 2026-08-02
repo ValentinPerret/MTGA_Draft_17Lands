@@ -14,6 +14,7 @@ from typing import List, Optional
 from pydantic import ValidationError
 
 from src.configuration import get_config_path
+from src.game_review.deck_advisor import build_game_indicators
 from src.game_review.models import (
     CodexGameReview,
     MatchReview,
@@ -60,6 +61,8 @@ class GameReviewStore:
                 turns=game.turns,
                 coverage=game.coverage,
                 decision_count=len(game.decisions),
+                deck_fingerprint=game.deck_fingerprint,
+                indicators=build_game_indicators(game),
                 deterministic_review=review,
                 codex_review=existing.codex_review if existing else None,
             )
@@ -82,6 +85,22 @@ class GameReviewStore:
 
     def get(self, key: str) -> Optional[StoredGameReview]:
         return next((game for game in self.load().games if game.match_key == key), None)
+
+    def same_deck_games(
+        self,
+        deck_fingerprint: str,
+        *,
+        exclude_key: str = "",
+        limit: int = 8,
+    ) -> List[StoredGameReview]:
+        if not deck_fingerprint:
+            return []
+        return [
+            game
+            for game in self.load().games
+            if game.deck_fingerprint == deck_fingerprint
+            and game.match_key != exclude_key
+        ][:limit]
 
     def progress(self) -> ProgressSummary:
         games = self.load().games

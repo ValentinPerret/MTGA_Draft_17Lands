@@ -5,7 +5,7 @@ import pytest
 
 from src.configuration import Configuration
 from src.game_review.analyzer import analyze_game
-from src.game_review.models import ParsedGame
+from src.game_review.models import GameCard, ParsedGame
 from src.game_review.store import GameReviewStore
 from src.ui.styles import Theme
 from src.ui.windows.game_review import GameReviewPanel
@@ -40,6 +40,21 @@ def test_game_review_panel_populates_match_review_and_progress(root, tmp_path):
         turns=9,
         coverage="full",
         game_state_messages=40,
+        deck_fingerprint="same-deck-test",
+        deck_cards=[
+            *[
+                GameCard(name="Island", types=["Land", "Basic"], colors=["U"])
+                for _ in range(17)
+            ],
+            *[
+                GameCard(name="Test Creature", types=["Creature"], cmc=2, colors=["U"])
+                for _ in range(23)
+            ],
+        ],
+        sideboard_cards=[
+            GameCard(name="Sideboard Card", types=["Creature"], cmc=1, colors=["U"])
+            for _ in range(15)
+        ],
     )
     scanner = MagicMock()
     scanner.arena_file = str(log_path)
@@ -59,13 +74,23 @@ def test_game_review_panel_populates_match_review_and_progress(root, tmp_path):
 
     assert len(panel.match_tree.get_children()) == 1
     assert str(panel.btn_codex.cget("state")) == "normal"
-    assert len(panel.detail_notebook.tabs()) == 3
+    assert len(panel.detail_notebook.tabs()) == 4
     assert "1–0" in panel.progress_cards["record"].cget("text")
     assert "No clear mistake" in " ".join(
         str(widget.cget("text"))
         for widget in panel.review_content.winfo_children()
         if hasattr(widget, "cget")
     )
+    assert "40 cards" in " ".join(
+        str(widget.cget("text"))
+        for widget in panel.deck_content.winfo_children()
+        if hasattr(widget, "cget")
+    )
+    assert "no automatic deck change" in " ".join(
+        str(widget.cget("text"))
+        for widget in panel.deck_content.winfo_children()
+        if hasattr(widget, "cget")
+    ).lower()
 
 
 def test_game_review_panel_explains_missing_log(root, tmp_path):

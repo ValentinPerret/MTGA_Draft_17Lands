@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -159,6 +160,10 @@ class _GameBuilder:
         self.pending: Dict[int, GameDecision] = {}
         self.decisions: List[GameDecision] = []
         self.actions: List[GameAction] = []
+        self.deck_card_ids: List[int] = []
+        self.sideboard_card_ids: List[int] = []
+        self.deck_cards: List[GameCard] = []
+        self.sideboard_cards: List[GameCard] = []
         self.game_state_messages = 0
 
     def apply_metadata(self, metadata: Dict):
@@ -175,6 +180,19 @@ class _GameBuilder:
             self.user_seat = int(seats[0])
 
         message_type = message.get("type", "")
+        if message_type == "GREMessageType_ConnectResp":
+            deck_message = message.get("connectResp", {}).get("deckMessage", {})
+            self.deck_card_ids = [
+                int(card_id)
+                for card_id in deck_message.get("deckCards", [])
+                if str(card_id).isdigit()
+            ]
+            self.sideboard_card_ids = [
+                int(card_id)
+                for card_id in deck_message.get("sideboardCards", [])
+                if str(card_id).isdigit()
+            ]
+            return
         if message_type == "GREMessageType_GameStateMessage":
             self._apply_game_state(message.get("gameStateMessage", {}))
             return
@@ -435,6 +453,8 @@ class _GameBuilder:
         local = self.catalog.resolve(card_id)
         raw_types = game_object.get("cardTypes", [])
         types = local.get("types") or [str(value).replace("CardType_", "") for value in raw_types]
+        all_decks = local.get("deck_colors", {}).get("All Decks", {})
+        gihwr = all_decks.get("gihwr")
         power = game_object.get("power", {}).get("value")
         toughness = game_object.get("toughness", {}).get("value")
         return GameCard(
@@ -442,19 +462,23 @@ class _GameBuilder:
             card_id=card_id,
             name=str(local.get("name") or f"Card {card_id}"),
             mana_cost=str(local.get("mana_cost", "")),
+            cmc=float(local.get("cmc", 0.0) or 0.0),
+            colors=list(local.get("colors") or []),
             types=types,
             oracle_text=str(local.get("oracle_text", "") or ""),
+            gihwr=float(gihwr) if isinstance(gihwr, (int, float)) and gihwr > 0 else None,
             power=int(power) if isinstance(power, (int, float)) else None,
             toughness=int(toughness) if isinstance(toughness, (int, float)) else None,
             tapped=bool(game_object.get("isTapped", False)),
         )
 
     def card_ids(self) -> set[int]:
-        return {
+        object_ids = {
             int(value.get("grpId", 0) or 0)
             for value in self.objects.values()
             if value.get("grpId")
         }
+        return object_ids | set(self.deck_card_ids) | set(self.sideboard_card_ids)
 
     def enrich_cards(self):
         self.catalog.prime(self.event_id, self.card_ids())
@@ -472,12 +496,21 @@ class _GameBuilder:
             local = self.catalog.resolve(card.card_id)
             if not local:
                 return card
+            all_decks = local.get("deck_colors", {}).get("All Decks", {})
+            gihwr = all_decks.get("gihwr")
             return card.model_copy(
                 update={
                     "name": str(local.get("name") or card.name),
                     "mana_cost": str(local.get("mana_cost", card.mana_cost)),
+                    "cmc": float(local.get("cmc", card.cmc) or 0.0),
+                    "colors": list(local.get("colors") or card.colors),
                     "types": local.get("types") or card.types,
                     "oracle_text": str(local.get("oracle_text", card.oracle_text) or ""),
+                    "gihwr": (
+                        float(gihwr)
+                        if isinstance(gihwr, (int, float)) and gihwr > 0
+                        else card.gihwr
+                    ),
                 }
             )
 
@@ -494,6 +527,16 @@ class _GameBuilder:
             action.model_copy(update={"card": enrich(action.card)})
             for action in self.actions
         ]
+        self.deck_cards = [
+            card
+            for card_id in self.deck_card_ids
+            if (card := self._card(0, card_id)) is not None
+        ]
+        self.sideboard_cards = [
+            card
+            for card_id in self.sideboard_card_ids
+            if (card := self._card(0, card_id)) is not None
+        ]
 
     def to_game(self) -> ParsedGame:
         self.enrich_cards()
@@ -507,6 +550,14 @@ class _GameBuilder:
         limited = self.super_format == "SuperFormat_Limited" or any(
             token in self.event_id.lower() for token in ("draft", "sealed")
         )
+        deck_fingerprint = ""
+        if self.deck_card_ids:
+            normalized_deck = ",".join(
+                str(card_id) for card_id in sorted(self.deck_card_ids)
+            )
+            deck_fingerprint = hashlib.sha256(
+                normalized_deck.encode("utf-8")
+            ).hexdigest()[:20]
         return ParsedGame(
             match_id=self.match_id,
             played_at=self.played_at,
@@ -523,6 +574,9 @@ class _GameBuilder:
             game_state_messages=self.game_state_messages,
             decisions=self.decisions,
             actions=self.actions,
+            deck_cards=self.deck_cards,
+            sideboard_cards=self.sideboard_cards,
+            deck_fingerprint=deck_fingerprint,
             final_player_life=self._life(self.user_seat),
             final_opponent_life=self._life(opponent_seat),
         )

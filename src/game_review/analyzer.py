@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Iterable
 
-from src.game_review.models import MatchReview, ParsedGame, ReviewFinding
+from src.game_review.deck_advisor import recommend_deck_changes
+from src.game_review.models import GameIndicators, MatchReview, ParsedGame, ReviewFinding
 
 
 def _is_land(card) -> bool:
@@ -131,7 +133,10 @@ def _timeout_finding(game: ParsedGame):
     )
 
 
-def analyze_game(game: ParsedGame) -> MatchReview:
+def analyze_game(
+    game: ParsedGame,
+    prior_indicators: Iterable[GameIndicators] = (),
+) -> MatchReview:
     """Return only findings supported by observable log evidence."""
     findings = []
     opening = _opening_hand_finding(game)
@@ -170,4 +175,5 @@ def analyze_game(game: ParsedGame) -> MatchReview:
         strengths=strengths[:5],
         focus_areas=focus_areas[:5],
         findings=findings[:10],
+        deck_changes=recommend_deck_changes(game, prior_indicators),
     )
