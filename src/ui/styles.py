@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 import tkinter.ttk as tk_ttk
 
 # --- MONKEY PATCH TKINTER.TTK TO PREVENT TTKBOOTSTRAP NATIVE THEME CRASH ---
-_orig_element_create = tk_ttk.Style.element_create
+_current_element_create = tk_ttk.Style.element_create
+_orig_element_create = getattr(
+    _current_element_create, "_mtga_original", _current_element_create
+)
 
 
 def _safe_element_create(self, elementname, etype, *args, **kw):
@@ -34,6 +37,7 @@ def _safe_element_create(self, elementname, etype, *args, **kw):
             raise
 
 
+_safe_element_create._mtga_original = _orig_element_create
 tk_ttk.Style.element_create = _safe_element_create
 
 
@@ -43,7 +47,7 @@ class Theme:
         if sys.platform == "darwin"
         else ("Ubuntu" if sys.platform == "linux" else "Segoe UI")
     )
-    FONT_SIZE_MAIN = 10
+    FONT_SIZE_MAIN = 11
     FONT_SIZE_SMALL = 9
     current_scale: float = 1.0
     _last_scale = None
@@ -257,7 +261,7 @@ class Theme:
                 root=root, family=cls.FONT_FAMILY, size=main_font_size
             )
             linespace = test_font.metrics("linespace")
-            padding = 8 if sys.platform == "darwin" else 14
+            padding = 12 if sys.platform == "darwin" else 16
             row_height = linespace + int(padding * scale)
         except Exception as e:
             base_row_height = 26 if sys.platform == "darwin" else 32
@@ -325,17 +329,123 @@ class Theme:
 
             style.configure(
                 "TNotebook.Tab",
-                padding=cls.scaled_val([12, 6]),
+                padding=cls.scaled_val([16, 10]),
                 font=(cls.FONT_FAMILY, main_font_size, "bold"),
             )
             style.map(
                 "TNotebook.Tab",
                 foreground=[("selected", cls.ACCENT), ("!selected", cls.TEXT_MAIN)],
-                background=[("selected", cls.BG_PRIMARY)],
+                background=[("selected", cls.BG_TERTIARY)],
             )
 
+        # Material-inspired application tokens. Tk does not offer Material's
+        # shape primitives, so hierarchy comes from tonal surfaces, generous
+        # spacing, typography, and unambiguous interaction states.
+        surface_bg = cls.BG_TERTIARY
+        style.configure("App.TFrame", background=cls.BG_PRIMARY)
+        style.configure("Surface.TFrame", background=surface_bg, relief="flat")
+        style.configure("AppBar.TFrame", background=surface_bg, relief="flat")
+        style.configure("Footer.TFrame", background=cls.BG_PRIMARY, relief="flat")
+
         style.configure(
-            "Card.TFrame", background=cls.BG_PRIMARY, relief="flat", borderwidth=0
+            "Title.TLabel",
+            background=cls.BG_PRIMARY,
+            foreground=cls.TEXT_MAIN,
+            font=cls.scaled_font(20, "bold"),
+        )
+        style.configure(
+            "SectionTitle.TLabel",
+            background=cls.BG_PRIMARY,
+            foreground=cls.TEXT_MAIN,
+            font=cls.scaled_font(13, "bold"),
+        )
+        style.configure(
+            "Muted.TLabel",
+            background=cls.BG_PRIMARY,
+            foreground=cls.TEXT_MUTED,
+            font=cls.scaled_font(10),
+        )
+        style.configure(
+            "Surface.TLabel",
+            background=surface_bg,
+            foreground=cls.TEXT_MAIN,
+            font=cls.scaled_font(10),
+        )
+        style.configure(
+            "SurfaceTitle.TLabel",
+            background=surface_bg,
+            foreground=cls.TEXT_MAIN,
+            font=cls.scaled_font(13, "bold"),
+        )
+        style.configure(
+            "SurfaceMuted.TLabel",
+            background=surface_bg,
+            foreground=cls.TEXT_MUTED,
+            font=cls.scaled_font(10),
+        )
+        style.configure(
+            "Badge.TLabel",
+            background=cls.ACCENT,
+            foreground="#ffffff",
+            font=cls.scaled_font(9, "bold"),
+            padding=cls.scaled_val((10, 5)),
+        )
+
+        material_row_height = cls.scaled_val(32)
+        if isinstance(row_height, (int, float)):
+            material_row_height = max(row_height, material_row_height)
+
+        style.configure(
+            "Treeview",
+            background=surface_bg,
+            fieldbackground=surface_bg,
+            foreground=cls.TEXT_MAIN,
+            rowheight=material_row_height,
+            borderwidth=0,
+            relief="flat",
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", cls.ACCENT)],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=cls.BG_SECONDARY,
+            foreground=cls.TEXT_MUTED,
+            font=cls.scaled_font(10, "bold"),
+            padding=cls.scaled_val((10, 8)),
+            relief="flat",
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", surface_bg)],
+            foreground=[("active", cls.TEXT_MAIN)],
+        )
+
+        for widget_style in ("TButton", "TMenubutton", "TEntry", "TCombobox"):
+            style.configure(widget_style, padding=cls.scaled_val((12, 8)))
+
+        style.configure(
+            "Material.TNotebook",
+            background=cls.BG_PRIMARY,
+            borderwidth=0,
+            tabmargins=cls.scaled_val((0, 8, 0, 0)),
+        )
+        style.configure(
+            "Material.TNotebook.Tab",
+            padding=cls.scaled_val((18, 10)),
+            font=cls.scaled_font(10, "bold"),
+            borderwidth=0,
+        )
+        style.map(
+            "Material.TNotebook.Tab",
+            background=[("selected", surface_bg), ("active", cls.BG_SECONDARY)],
+            foreground=[("selected", cls.ACCENT), ("!selected", cls.TEXT_MUTED)],
+        )
+
+        style.configure(
+            "Card.TFrame", background=surface_bg, relief="flat", borderwidth=0
         )
         root.configure(bg=cls.BG_PRIMARY)
         root.event_generate("<<ThemeChanged>>")

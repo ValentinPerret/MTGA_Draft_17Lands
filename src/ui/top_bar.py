@@ -21,97 +21,145 @@ logger = logging.getLogger(__name__)
 
 class TopBarControls(ttk.Frame):
     def __init__(self, parent, app_context):
-        super().__init__(parent, padding=Theme.scaled_val(5))
+        super().__init__(
+            parent, style="AppBar.TFrame", padding=Theme.scaled_val((16, 14))
+        )
         self.app = app_context
         self.history_files = {}
 
         self._build_ui()
 
     def _build_ui(self):
-        # ROW 1: Status & Overlay
-        row1 = ttk.Frame(self)
-        row1.pack(fill="x", pady=(0, Theme.scaled_val(5)))
+        # Row 1: application state and primary utility action.
+        row1 = ttk.Frame(self, style="AppBar.TFrame")
+        row1.pack(fill="x", pady=(0, Theme.scaled_val(12)))
 
-        self.status_dot = ttk.Label(
-            row1, text="●", font=Theme.scaled_font(16), bootstyle="secondary"
+        status_cluster = ttk.Frame(row1, style="AppBar.TFrame")
+        status_cluster.pack(side="left", fill="x", expand=True)
+
+        self.status_dot = ttk.Frame(
+            status_cluster,
+            width=Theme.scaled_val(10),
+            height=Theme.scaled_val(10),
+            bootstyle="secondary",
         )
-        self.status_dot.pack(side="left", padx=Theme.scaled_val(5))
+        self.status_dot.pack(side="left", padx=(0, Theme.scaled_val(10)))
+        self.status_dot.pack_propagate(False)
+
+        status_text = ttk.Frame(status_cluster, style="AppBar.TFrame")
+        status_text.pack(side="left", fill="x", expand=True)
 
         self.lbl_status = ttk.Label(
-            row1,
+            status_text,
             textvariable=self.app.vars["status_text"],
-            font=Theme.scaled_font(11, "bold"),
-            bootstyle="primary",
+            style="SurfaceTitle.TLabel",
         )
-        self.lbl_status.pack(side="left", padx=(0, Theme.scaled_val(10)))
+        self.lbl_status.pack(anchor="w")
+        ttk.Label(
+            status_text,
+            text="Arena monitor and draft recommendations",
+            style="SurfaceMuted.TLabel",
+        ).pack(anchor="w")
 
         ttk.Button(
             row1,
-            text="Mini Mode",
+            text="Open mini overlay",
             bootstyle="info-outline",
             command=self.app._enable_overlay,
-            width=-10,
-        ).pack(side="right", padx=Theme.scaled_val(5))
+        ).pack(side="right", padx=(Theme.scaled_val(12), 0))
+
+        history_field = ttk.Frame(row1, style="AppBar.TFrame")
+        history_field.pack(side="right")
+        ttk.Label(
+            history_field, text="Draft session", style="SurfaceMuted.TLabel"
+        ).pack(anchor="w")
 
         self.combo_history = ttk.Combobox(
-            row1,
+            history_field,
             textvariable=self.app.vars["set_label"],
             state="readonly",
-            font=Theme.scaled_font(10, "bold"),
-            width=36,
-            justify="right",
+            font=Theme.scaled_font(10),
+            width=32,
+            justify="left",
         )
-        self.combo_history.pack(side="right", padx=Theme.scaled_val(10))
+        self.combo_history.pack(anchor="e")
         self.combo_history.bind("<<ComboboxSelected>>", self._on_history_select)
         self.combo_history.bind("<Button-1>", lambda e: self.update_history_dropdown())
 
-        # ROW 2: Controls
-        row2 = ttk.Frame(self)
+        # Row 2: contextual dataset controls with visible field labels.
+        row2 = ttk.Frame(self, style="AppBar.TFrame")
         row2.pack(fill="x")
+
+        ttk.Label(
+            row2, text="Draft context", style="SurfaceTitle.TLabel"
+        ).pack(side="left", padx=(0, Theme.scaled_val(12)))
 
         self.btn_reload = ttk.Button(
             row2,
-            text="Reload",
+            text="Reload draft",
             command=self.app._force_reload,
-            width=7,
             bootstyle="secondary-outline",
         )
-        self.btn_reload.pack(side="left", padx=Theme.scaled_val(2))
+        self.btn_reload.pack(side="left")
 
-        self.dataset_controls_frame = ttk.Frame(row2)
+        self.dataset_controls_frame = ttk.Frame(row2, style="AppBar.TFrame")
         self.dataset_controls_frame.pack(side="right")
 
+        filter_field = ttk.Frame(
+            self.dataset_controls_frame, style="AppBar.TFrame"
+        )
+        filter_field.pack(side="right", padx=(Theme.scaled_val(10), 0))
+        ttk.Label(
+            filter_field, text="Deck filter", style="SurfaceMuted.TLabel"
+        ).pack(anchor="w")
+
         self.om_filter = ttk.OptionMenu(
-            self.dataset_controls_frame,
+            filter_field,
             self.app.vars["deck_filter"],
             "",
             style="TMenubutton",
         )
-        self.om_filter.pack(side="right", padx=Theme.scaled_val(2))
+        self.om_filter.pack(fill="x")
 
         self.lbl_auto_detect = ttk.Label(
-            self.dataset_controls_frame,
+            filter_field,
             text="",
             font=Theme.scaled_font(9, "italic"),
             bootstyle="info",
         )
-        self.lbl_auto_detect.pack(side="right", padx=Theme.scaled_val(8))
+        self.lbl_auto_detect.pack(anchor="e")
+
+        group_field = ttk.Frame(
+            self.dataset_controls_frame, style="AppBar.TFrame"
+        )
+        group_field.pack(side="right", padx=(Theme.scaled_val(10), 0))
+        ttk.Label(
+            group_field, text="Player group", style="SurfaceMuted.TLabel"
+        ).pack(anchor="w")
 
         self.om_group = ttk.OptionMenu(
-            self.dataset_controls_frame,
+            group_field,
             self.app.vars["selected_group"],
             "",
             style="TMenubutton",
         )
-        self.om_group.pack(side="right", padx=Theme.scaled_val(2))
+        self.om_group.pack(fill="x")
+
+        event_field = ttk.Frame(
+            self.dataset_controls_frame, style="AppBar.TFrame"
+        )
+        event_field.pack(side="right", padx=(Theme.scaled_val(10), 0))
+        ttk.Label(
+            event_field, text="Event", style="SurfaceMuted.TLabel"
+        ).pack(anchor="w")
 
         self.om_event = ttk.OptionMenu(
-            self.dataset_controls_frame,
+            event_field,
             self.app.vars["selected_event"],
             "",
             style="TMenubutton",
         )
-        self.om_event.pack(side="right", padx=Theme.scaled_val(2))
+        self.om_event.pack(fill="x")
 
         # Wire up Traces
         self.app.vars["deck_filter"].trace_add(

@@ -49,12 +49,12 @@ class TestAppLayoutManager:
         # Hide tabs
         layout.toggle_tabs()
         assert layout.tabs_visible is False
-        assert "Show Tabs" in layout.btn_toggle_tabs.cget("text")
+        assert "Show tools" in layout.btn_toggle_tabs.cget("text")
 
         # Show tabs again
         layout.toggle_tabs()
         assert layout.tabs_visible is True
-        assert "Hide Tabs" in layout.btn_toggle_tabs.cget("text")
+        assert "Hide tools" in layout.btn_toggle_tabs.cget("text")
 
     def test_ensure_tabs_visible(self, mock_app):
         """Verify the defensive method guarantees tabs are shown."""

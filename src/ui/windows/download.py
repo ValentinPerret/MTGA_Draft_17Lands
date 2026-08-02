@@ -3,6 +3,7 @@ import threading
 import queue
 import os
 import json
+import re
 from tkinter import ttk, messagebox
 from datetime import date
 from typing import Optional
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from src import constants
 from src.configuration import write_configuration
 from src.file_extractor import FileExtractor
-from src.utils import retrieve_local_set_list, read_local_manifest
+from src.utils import retrieve_local_set_list, read_local_manifest, open_file
 from src.ui.components import DynamicTreeviewManager, AutoScrollbar
 from src.ui.styles import Theme
 
@@ -48,14 +49,23 @@ class DownloadWindow(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-        canvas = tkinter.Canvas(self, highlightthickness=0)
+        canvas = tkinter.Canvas(
+            self,
+            highlightthickness=0,
+            borderwidth=0,
+            background=Theme.BG_PRIMARY,
+        )
         scrollbar = AutoScrollbar(self, orient="vertical", command=canvas.yview)
 
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        container = ttk.Frame(canvas, padding=Theme.scaled_val(10))
+        container = ttk.Frame(
+            canvas,
+            style="App.TFrame",
+            padding=Theme.scaled_val((6, 10, 6, 18)),
+        )
         canvas_window = canvas.create_window((0, 0), window=container, anchor="nw")
 
         def _on_content_resize(event):
@@ -72,12 +82,63 @@ class DownloadWindow(ttk.Frame):
         bind_scroll(canvas, canvas.yview_scroll)
         bind_scroll(container, canvas.yview_scroll)
 
+        self.vars["dataset_count"] = tkinter.StringVar(value="No downloads yet")
+        self.vars["active_dataset"] = tkinter.StringVar(
+            value="No active dataset selected"
+        )
+
+        header = ttk.Frame(
+            container, style="Surface.TFrame", padding=Theme.scaled_val(16)
+        )
+        header.pack(fill="x", pady=(0, Theme.scaled_val(12)))
+        header.columnconfigure(0, weight=1)
+
+        title_stack = ttk.Frame(header, style="Surface.TFrame")
+        title_stack.grid(row=0, column=0, sticky="ew")
+        ttk.Label(
+            title_stack, text="Downloaded datasets", style="SurfaceTitle.TLabel"
+        ).pack(anchor="w")
+        ttk.Label(
+            title_stack,
+            text="Every row below is stored on this computer. Choose one to power ratings and recommendations.",
+            style="SurfaceMuted.TLabel",
+        ).pack(anchor="w", pady=(Theme.scaled_val(2), 0))
+
+        ttk.Label(
+            header, textvariable=self.vars["dataset_count"], style="Badge.TLabel"
+        ).grid(row=0, column=1, sticky="e", padx=(Theme.scaled_val(12), 0))
+
+        ttk.Label(
+            header,
+            textvariable=self.vars["active_dataset"],
+            style="Surface.TLabel",
+            font=Theme.scaled_font(10, "bold"),
+        ).grid(row=1, column=0, sticky="w", pady=(Theme.scaled_val(12), 0))
+        ttk.Button(
+            header,
+            text="Open download folder",
+            command=self._open_dataset_folder,
+            bootstyle="secondary-outline",
+        ).grid(
+            row=1,
+            column=1,
+            sticky="e",
+            padx=(Theme.scaled_val(12), 0),
+            pady=(Theme.scaled_val(8), 0),
+        )
+
+        table_card = ttk.Frame(
+            container, style="Surface.TFrame", padding=Theme.scaled_val(12)
+        )
+        table_card.pack(fill="x", pady=(0, Theme.scaled_val(12)))
+
         self.table_manager = DynamicTreeviewManager(
-            container,
+            table_card,
             view_id="dataset_manager",
             configuration=self.configuration,
             on_update_callback=lambda: None,
             static_columns=[
+                "Status",
                 "Set",
                 "Event",
                 "Group",
@@ -86,18 +147,78 @@ class DownloadWindow(ttk.Frame):
                 "Collected",
                 "Games",
             ],
-            height=4,
+            height=6,
         )
-        self.table_manager.pack(fill="x", pady=Theme.scaled_val((0, 10)))
+        self.table_manager.pack(fill="x")
         self.table = self.table_manager.tree
         self.table.bind("<Double-1>", self._on_set_active)
         self.table.bind("<Button-3>", self._on_context_menu)
         self.table.bind("<Control-Button-1>", self._on_context_menu)
+        self.table.bind("<<TreeviewSelect>>", self._on_dataset_selection)
 
-        form = ttk.Frame(container, style="Card.TFrame", padding=Theme.scaled_val(12))
+        column_widths = {
+            "Status": (78, False),
+            "Set": (150, True),
+            "Event": (125, True),
+            "Group": (100, False),
+            "Start": (105, False),
+            "End": (105, False),
+            "Collected": (155, True),
+            "Games": (95, False),
+        }
+        for column, (width, stretch) in column_widths.items():
+            self.table.column(
+                column,
+                width=Theme.scaled_val(width),
+                minwidth=Theme.scaled_val(60),
+                stretch=stretch,
+            )
+
+        table_actions = ttk.Frame(table_card, style="Surface.TFrame")
+        table_actions.pack(fill="x", pady=(Theme.scaled_val(10), 0))
+        ttk.Label(
+            table_actions,
+            text="Select a row to manage it. Double-click still activates a dataset.",
+            style="SurfaceMuted.TLabel",
+        ).pack(side="left", fill="x", expand=True)
+        self.btn_delete_selected = ttk.Button(
+            table_actions,
+            text="Delete selected",
+            command=self._delete_selected_dataset,
+            bootstyle="danger-outline",
+            state="disabled",
+        )
+        self.btn_delete_selected.pack(side="right", padx=(Theme.scaled_val(8), 0))
+        self.btn_use_selected = ttk.Button(
+            table_actions,
+            text="Use selected",
+            command=self._on_set_active,
+            bootstyle="primary",
+            state="disabled",
+        )
+        self.btn_use_selected.pack(side="right")
+
+        form = ttk.Frame(
+            container, style="Surface.TFrame", padding=Theme.scaled_val(16)
+        )
         form.pack(fill="x")
-        form.columnconfigure(1, weight=1)
-        form.columnconfigure(3, weight=1)
+        for column in range(4):
+            form.columnconfigure(column, weight=1)
+
+        ttk.Label(
+            form, text="Download a dataset", style="SurfaceTitle.TLabel"
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(
+            form,
+            text="Create a local 17Lands snapshot for a set and draft format.",
+            style="SurfaceMuted.TLabel",
+        ).grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(Theme.scaled_val(2), Theme.scaled_val(12)),
+        )
 
         # --- DYNAMIC SET SORTING & SEPARATOR LOGIC ---
         set_options = list(self.sets_data.keys())
@@ -152,8 +273,8 @@ class DownloadWindow(ttk.Frame):
         )
         self.vars["set"] = tkinter.StringVar(value=default_val)
 
-        ttk.Label(form, text="SET:").grid(
-            row=0, column=0, sticky="e", padx=Theme.scaled_val(5)
+        ttk.Label(form, text="Set", style="SurfaceMuted.TLabel").grid(
+            row=2, column=0, sticky="w"
         )
 
         self.om_set = ttk.OptionMenu(form, self.vars["set"], default_val)
@@ -175,12 +296,18 @@ class DownloadWindow(ttk.Frame):
                 command=tkinter._setit(self.vars["set"], opt, self._on_set_change),
             )
 
-        self.om_set.grid(row=0, column=1, sticky="ew", pady=Theme.scaled_val(2))
+        self.om_set.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=(0, Theme.scaled_val(8)),
+            pady=(Theme.scaled_val(3), Theme.scaled_val(10)),
+        )
         # --- END DYNAMIC SET SORTING ---
 
         self.vars["event"] = tkinter.StringVar(value="PremierDraft")
-        ttk.Label(form, text="EVENT:").grid(
-            row=0, column=2, sticky="e", padx=Theme.scaled_val(5)
+        ttk.Label(form, text="Event", style="SurfaceMuted.TLabel").grid(
+            row=2, column=1, sticky="w", padx=(Theme.scaled_val(4), 0)
         )
         self.om_event = ttk.OptionMenu(
             form,
@@ -188,22 +315,38 @@ class DownloadWindow(ttk.Frame):
             "PremierDraft",
             *sorted(constants.LIMITED_TYPE_LIST),
         )
-        self.om_event.grid(row=0, column=3, sticky="ew", pady=Theme.scaled_val(2))
+        self.om_event.grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            padx=Theme.scaled_val(4),
+            pady=(Theme.scaled_val(3), Theme.scaled_val(10)),
+        )
 
         self.vars["group"] = tkinter.StringVar(value="All")
-        ttk.Label(form, text="USERS:").grid(
-            row=1, column=0, sticky="e", padx=Theme.scaled_val(5)
+        ttk.Label(form, text="Player group", style="SurfaceMuted.TLabel").grid(
+            row=2, column=2, sticky="w", padx=(Theme.scaled_val(4), 0)
         )
         ttk.OptionMenu(
             form, self.vars["group"], "All", *constants.LIMITED_GROUPS_LIST
-        ).grid(row=1, column=1, sticky="ew", pady=Theme.scaled_val(2))
+        ).grid(
+            row=3,
+            column=2,
+            sticky="ew",
+            padx=Theme.scaled_val(4),
+            pady=(Theme.scaled_val(3), Theme.scaled_val(10)),
+        )
 
         self.vars["threshold"] = tkinter.StringVar(value="500")
-        ttk.Label(form, text="MIN GAMES:").grid(
-            row=1, column=2, sticky="e", padx=Theme.scaled_val(5)
+        ttk.Label(form, text="Minimum games", style="SurfaceMuted.TLabel").grid(
+            row=2, column=3, sticky="w", padx=(Theme.scaled_val(4), 0)
         )
         ttk.Entry(form, textvariable=self.vars["threshold"]).grid(
-            row=1, column=3, sticky="ew", pady=Theme.scaled_val(2)
+            row=3,
+            column=3,
+            sticky="ew",
+            padx=(Theme.scaled_val(4), 0),
+            pady=(Theme.scaled_val(3), Theme.scaled_val(10)),
         )
 
         # 17Lands replaced custom start/end date ranges with time_period presets.
@@ -215,45 +358,103 @@ class DownloadWindow(ttk.Frame):
         self.vars["period"] = tkinter.StringVar(
             value=constants.TIME_PERIOD_DEFAULT_LABEL
         )
-        ttk.Label(form, text="TIME PERIOD:").grid(
-            row=2, column=0, sticky="e", padx=Theme.scaled_val(5)
+        ttk.Label(form, text="Time period", style="SurfaceMuted.TLabel").grid(
+            row=4, column=0, sticky="w"
         )
         ttk.OptionMenu(
             form,
             self.vars["period"],
             constants.TIME_PERIOD_DEFAULT_LABEL,
             *constants.TIME_PERIOD_LABELS,
-        ).grid(row=2, column=1, sticky="ew", pady=Theme.scaled_val(2))
+        ).grid(
+            row=5,
+            column=0,
+            sticky="ew",
+            padx=(0, Theme.scaled_val(8)),
+            pady=(Theme.scaled_val(3), 0),
+        )
+
+        ttk.Label(
+            form,
+            text="All Time is the most stable default. Minimum games only affects color-specific views.",
+            style="SurfaceMuted.TLabel",
+        ).grid(
+            row=5,
+            column=1,
+            columnspan=2,
+            sticky="w",
+            padx=Theme.scaled_val(4),
+        )
 
         self.btn_dl = ttk.Button(
-            form, text="Download Selected Dataset", command=self._manual_download
+            form,
+            text="Download dataset",
+            command=self._manual_download,
+            bootstyle="primary",
         )
         self.btn_dl.grid(
-            row=3, column=0, columnspan=4, pady=Theme.scaled_val((10, 0)), sticky="ew"
+            row=5,
+            column=3,
+            pady=0,
+            padx=(Theme.scaled_val(8), 0),
+            sticky="ew",
         )
 
         self.btn_clear = ttk.Button(
             form,
-            text="Clear Set History",
+            text="Clear all downloads",
             command=self._clear_set_history,
-            bootstyle="secondary",
+            bootstyle="danger-outline",
         )
         self.btn_clear.grid(
-            row=4, column=0, columnspan=4, pady=Theme.scaled_val((5, 0)), sticky="ew"
+            row=6,
+            column=3,
+            pady=(Theme.scaled_val(8), 0),
+            padx=(Theme.scaled_val(8), 0),
+            sticky="ew",
         )
 
-        self.progress = ttk.Progressbar(container, mode="determinate")
-        self.progress.pack(fill="x", pady=Theme.scaled_val(5))
+        progress_card = ttk.Frame(
+            container, style="Surface.TFrame", padding=Theme.scaled_val((16, 12))
+        )
+        progress_card.pack(fill="x", pady=(Theme.scaled_val(12), 0))
+
+        self.progress = ttk.Progressbar(progress_card, mode="determinate")
+        self.progress.pack(fill="x")
 
         self.vars["status"] = tkinter.StringVar(value="Ready")
         ttk.Label(
-            container, textvariable=self.vars["status"], bootstyle="secondary"
-        ).pack()
+            progress_card,
+            textvariable=self.vars["status"],
+            style="SurfaceMuted.TLabel",
+        ).pack(anchor="w", pady=(Theme.scaled_val(6), 0))
 
         self._update_table()
 
         # Trigger an immediate synchronization so the dynamic dropdowns reflect the correct set's formats
         self._on_set_change(self.vars["set"].get())
+
+    def _open_dataset_folder(self):
+        open_file(constants.SETS_FOLDER)
+
+    def _on_dataset_selection(self, event=None):
+        selection = self.table.selection()
+        if not selection:
+            self.btn_use_selected.configure(state="disabled")
+            self.btn_delete_selected.configure(state="disabled")
+            return
+
+        filename = os.path.basename(selection[0])
+        is_active = filename == self.configuration.card_data.latest_dataset
+        self.btn_use_selected.configure(state="disabled" if is_active else "normal")
+        self.btn_delete_selected.configure(
+            state="disabled" if is_active else "normal"
+        )
+
+    def _delete_selected_dataset(self):
+        selection = self.table.selection()
+        if selection:
+            self._delete_dataset(selection[0])
 
     def _on_set_active(self, event=None):
         """Switches the application to use the selected dataset."""
@@ -285,10 +486,10 @@ class DownloadWindow(ttk.Frame):
         self.table.selection_set(row_id)
 
         menu = tkinter.Menu(self, tearoff=0)
-        menu.add_command(label="✅ Set as Active Dataset", command=self._on_set_active)
+        menu.add_command(label="Use as active dataset", command=self._on_set_active)
         menu.add_separator()
         menu.add_command(
-            label="🗑️ Delete Dataset", command=lambda: self._delete_dataset(row_id)
+            label="Delete dataset", command=lambda: self._delete_dataset(row_id)
         )
 
         menu.post(event.x_root, event.y_root)
@@ -423,25 +624,51 @@ class DownloadWindow(ttk.Frame):
         files, _ = retrieve_local_set_list(codes, list(self.sets_data.keys()))
 
         active_filename = self.configuration.card_data.latest_dataset
+        active_label = "No active dataset selected"
+        sorted_files = sorted(files, key=lambda x: x[7], reverse=True)
 
-        for idx, row in enumerate(sorted(files, key=lambda x: x[7], reverse=True)):
+        for idx, row in enumerate(sorted_files):
             filepath = row[6]
             filename = os.path.basename(filepath)
 
             is_active = filename == active_filename
+            status = "Active" if is_active else "Available"
             tag = (
                 "active_dataset_card"
                 if is_active
                 else ("bw_odd" if idx % 2 == 0 else "bw_even")
             )
 
+            if is_active:
+                event_name = re.sub(r"(?<!^)(?=[A-Z])", " ", str(row[1]))
+                active_label = (
+                    f"Active dataset: {row[0]} / {event_name} / {row[2]}"
+                )
+
             self.table.insert(
                 "",
                 "end",
                 iid=filepath,
-                values=(row[0], row[1], row[2], row[3], row[4], row[7], row[5]),
+                values=(
+                    status,
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[7],
+                    row[5],
+                ),
                 tags=(tag,),
             )
+
+        count = len(sorted_files)
+        self.vars["dataset_count"].set(
+            f"{count} downloaded" if count else "No downloads yet"
+        )
+        self.vars["active_dataset"].set(active_label)
+        self.btn_clear.configure(state="normal" if count else "disabled")
+        self._on_dataset_selection()
 
     def _start_download(self, args: DatasetArgs = None):
         try:

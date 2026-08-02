@@ -57,18 +57,20 @@ class AppLayoutManager:
         if self.main_container:
             self.main_container.destroy()
 
-        self.main_container = ttk.Frame(self.root, padding=Theme.scaled_val(8))
+        self.main_container = ttk.Frame(
+            self.root, style="App.TFrame", padding=Theme.scaled_val(16)
+        )
         self.main_container.pack(fill="both", expand=True)
 
         self.top_bar = TopBarControls(self.main_container, self.app)
-        self.top_bar.pack(fill="x", pady=(0, Theme.scaled_val(10)))
+        self.top_bar.pack(fill="x", pady=(0, Theme.scaled_val(12)))
 
         # Main Splitter
         self.splitter = ttk.PanedWindow(self.main_container, orient=tkinter.VERTICAL)
         self.splitter.pack(fill="both", expand=True)
 
-        self.top_pane = ttk.Frame(self.splitter)
-        self.splitter.add(self.top_pane, weight=4)
+        self.top_pane = ttk.Frame(self.splitter, style="App.TFrame")
+        self.splitter.add(self.top_pane, weight=3)
 
         self.dashboard = DashboardFrame(
             self.top_pane,
@@ -79,11 +81,13 @@ class AppLayoutManager:
             on_context_menu=self.app.interactions.on_card_context_menu,
         )
 
-        self.bottom_pane = ttk.Frame(self.splitter)
-        self.splitter.add(self.bottom_pane, weight=2)
+        self.bottom_pane = ttk.Frame(self.splitter, style="App.TFrame")
+        self.splitter.add(self.bottom_pane, weight=3)
 
         self.tab_controls = ttk.Frame(
-            self.top_pane, padding=Theme.scaled_val((10, 5, 10, 5))
+            self.top_pane,
+            style="Footer.TFrame",
+            padding=Theme.scaled_val((8, 8, 8, 8)),
         )
         self.tab_controls.pack(side="bottom", fill="x")
 
@@ -94,7 +98,7 @@ class AppLayoutManager:
 
         self.btn_toggle_tabs = ttk.Button(
             self.tab_controls,
-            text="▼ Hide Tabs",
+            text="Hide tools",
             bootstyle="secondary-outline",
             command=self.toggle_tabs,
             cursor="hand2",
@@ -104,7 +108,7 @@ class AppLayoutManager:
         self.lbl_session_info = ttk.Label(
             self.tab_controls,
             font=Theme.scaled_font(9),
-            bootstyle="secondary",
+            style="Muted.TLabel",
             anchor="w",
         )
         self.lbl_session_info.pack(
@@ -112,7 +116,7 @@ class AppLayoutManager:
         )
 
         # Tabs
-        self.notebook = ttk.Notebook(self.bottom_pane)
+        self.notebook = ttk.Notebook(self.bottom_pane, style="Material.TNotebook")
         self.notebook.pack(fill="both", expand=True)
 
         self._build_panels()
@@ -148,12 +152,12 @@ class AppLayoutManager:
             self.notebook, self.config, self.app._refresh_ui_data
         )
 
-        self.notebook.add(self.panel_data, text=" Datasets ")
-        self.notebook.add(self.panel_taken, text=" Card Pool ")
-        self.notebook.add(self.panel_suggest, text=" Deck Builder ")
-        self.notebook.add(self.panel_custom, text=" Custom Deck ")
-        self.notebook.add(self.panel_compare, text=" Comparisons ")
-        self.notebook.add(self.panel_tiers, text=" Tier Lists ")
+        self.notebook.add(self.panel_data, text="Datasets")
+        self.notebook.add(self.panel_taken, text="Card pool")
+        self.notebook.add(self.panel_suggest, text="Deck builder")
+        self.notebook.add(self.panel_custom, text="Custom deck")
+        self.notebook.add(self.panel_compare, text="Comparisons")
+        self.notebook.add(self.panel_tiers, text="Tier lists")
 
         # Safely trigger dataset UI refreshes if the panel supports it
         self.notebook.bind(
@@ -169,11 +173,11 @@ class AppLayoutManager:
     def toggle_tabs(self):
         if self.tabs_visible:
             self.splitter.forget(self.bottom_pane)
-            self.btn_toggle_tabs.config(text="▲ Show Tabs")
+            self.btn_toggle_tabs.config(text="Show tools")
             self.tabs_visible = False
         else:
             self.splitter.add(self.bottom_pane, weight=2)
-            self.btn_toggle_tabs.config(text="▼ Hide Tabs")
+            self.btn_toggle_tabs.config(text="Hide tools")
             self.tabs_visible = True
 
     def ensure_tabs_visible(self):
