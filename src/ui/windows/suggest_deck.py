@@ -198,10 +198,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.stats_canvas, self.stats_canvas.yview_scroll)
         bind_scroll(self.stats_frame, self.stats_canvas.yview_scroll)
-        self.stats_frame.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.stats_frame, self.stats_canvas.yview_scroll),
-        )
 
         # --- SIMULATION & SAMPLE HAND TAB ---
         self.hand_tab = ttk.Frame(self.notebook, padding=Theme.scaled_val(15))
@@ -260,10 +256,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.hand_canvas, self.hand_canvas.yview_scroll)
         bind_scroll(self.hand_container, self.hand_canvas.yview_scroll)
-        self.hand_container.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.hand_container, self.hand_canvas.yview_scroll),
-        )
 
         # Right Column: Scrollable Monte Carlo Simulation
         self.sim_outer_frame = ttk.Labelframe(
@@ -310,10 +302,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.sim_canvas, self.sim_canvas.yview_scroll)
         bind_scroll(self.sim_frame, self.sim_canvas.yview_scroll)
-        self.sim_frame.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.sim_frame, self.sim_canvas.yview_scroll),
-        )
 
         self.sim_label = ttk.Label(
             self.sim_frame,

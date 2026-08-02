@@ -490,12 +490,6 @@ class DashboardFrame(ttk.Frame):
 
         bind_scroll(self._sidebar_canvas, self._sidebar_canvas.yview_scroll)
         bind_scroll(self.sidebar_container, self._sidebar_canvas.yview_scroll)
-        self.sidebar_container.bind(
-            "<Enter>",
-            lambda e: bind_scroll(
-                self.sidebar_container, self._sidebar_canvas.yview_scroll
-            ),
-        )
 
         if self.sidebar_visible:
             self.h_splitter.add(self.sidebar_frame, weight=0)

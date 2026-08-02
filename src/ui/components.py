@@ -710,6 +710,13 @@ class ModernTreeview(ttk.Treeview):
         self._setup_row_colors()
         self._setup_column_drag()
 
+        # Normalize macOS trackpad input and route wheel events even when the
+        # pointer is above a cell. The custom bindtag runs before Tk's native
+        # Treeview class binding, avoiding an extra native scroll step.
+        from src.utils import bind_scroll
+
+        bind_scroll(self, self.yview_scroll)
+
         self._pulse_step = 0
         self._last_picked_items = set()
         self._animate_picked_row()
@@ -1591,6 +1598,17 @@ class ScrolledFrame(tb.Frame):
         self.canvas.bind(
             "<Configure>",
             lambda e: self.canvas.itemconfig(self.window_id, height=e.height),
+        )
+
+        # Card-pool children are created dynamically, so register both the
+        # canvas and its content frame with the shared descendant-aware router.
+        from src.utils import bind_scroll
+
+        bind_scroll(self.canvas, self.canvas.xview_scroll, horizontal=True)
+        bind_scroll(
+            self.scrollable_frame,
+            self.canvas.xview_scroll,
+            horizontal=True,
         )
 
 

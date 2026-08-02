@@ -30,7 +30,7 @@ from src.ui.components import (
 )
 from src.card_logic import copy_deck, get_deck_metrics
 from src.sealed_logic import SealedSession, generate_sealed_shells
-from src.utils import open_file
+from src.utils import bind_scroll, open_file
 
 
 class SealedStudioWindow(tb.Toplevel):
@@ -590,32 +590,8 @@ class SealedStudioWindow(tb.Toplevel):
         self.pool_canvas.grid(row=0, column=0, sticky="nsew")
         self.pool_scroll.grid(row=1, column=0, sticky="ew")
 
-        # Cross-platform mouse wheel scrolling horizontally for canvases
-        def _bind_horizontal_scroll(canvas):
-            import sys
-
-            if sys.platform == "darwin":
-                canvas.bind(
-                    "<MouseWheel>",
-                    lambda e: canvas.xview_scroll(-1 * e.delta, "units"),
-                    add="+",
-                )
-            elif sys.platform == "win32":
-                canvas.bind(
-                    "<MouseWheel>",
-                    lambda e: canvas.xview_scroll(-1 * (int(e.delta) // 120), "units"),
-                    add="+",
-                )
-            else:
-                canvas.bind(
-                    "<Button-4>", lambda e: canvas.xview_scroll(-1, "units"), add="+"
-                )
-                canvas.bind(
-                    "<Button-5>", lambda e: canvas.xview_scroll(1, "units"), add="+"
-                )
-
-        _bind_horizontal_scroll(self.deck_canvas)
-        _bind_horizontal_scroll(self.pool_canvas)
+        bind_scroll(self.deck_canvas, self.deck_canvas.xview_scroll, horizontal=True)
+        bind_scroll(self.pool_canvas, self.pool_canvas.xview_scroll, horizontal=True)
 
         self._bind_canvas_dnd(self.pool_canvas, is_pool=True)
         self._bind_canvas_dnd(self.deck_canvas, is_pool=False)

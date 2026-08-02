@@ -472,24 +472,150 @@ def sanitize_card_name(name: str) -> str:
     return name
 
 
-def bind_scroll(widget, scroll_command):
-    """
-    Applies cross-platform mouse wheel bindings to a Tkinter widget.
-    Smoothly handles OS-specific Delta calculation quirks.
-    """
-    import sys
+class _ScrollRouter:
+    """Route wheel events to the nearest registered scroll surface.
 
-    if sys.platform == "darwin":
-        widget.bind(
-            "<MouseWheel>", lambda e: scroll_command(-1 * e.delta, "units"), add="+"
+    Tk does not bubble mouse-wheel events through widget parents. A binding on
+    a canvas therefore stops working when the pointer is above a label, button,
+    or dynamically-created card inside that canvas. The router watches the
+    widget lineage and chooses the innermost surface that can still move.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self.registrations = {}
+        self.bindtag = f"MTGAScrollRouter_{id(self)}"
+
+        root.bind_class(self.bindtag, "<MouseWheel>", self._route)
+        root.bind_class(
+            self.bindtag,
+            "<Button-4>",
+            lambda event: self._route(event, linux_units=-1),
         )
-    elif sys.platform == "win32":
-        widget.bind(
-            "<MouseWheel>",
-            lambda e: scroll_command(-1 * (int(e.delta) // 120), "units"),
+        root.bind_class(
+            self.bindtag,
+            "<Button-5>",
+            lambda event: self._route(event, linux_units=1),
+        )
+        root.bind_all("<MouseWheel>", self._route, add="+")
+        root.bind_all(
+            "<Button-4>",
+            lambda event: self._route(event, linux_units=-1),
             add="+",
         )
-    else:
-        # Linux / X11
-        widget.bind("<Button-4>", lambda e: scroll_command(-1, "units"), add="+")
-        widget.bind("<Button-5>", lambda e: scroll_command(1, "units"), add="+")
+        root.bind_all(
+            "<Button-5>",
+            lambda event: self._route(event, linux_units=1),
+            add="+",
+        )
+
+    def register(self, widget, scroll_command, horizontal=False):
+        self.registrations[widget] = (scroll_command, horizontal)
+
+        # A custom bindtag runs after widget-specific handlers (for example,
+        # hover-preview cancellation) but before Tk's platform-specific class
+        # binding. Returning ``break`` prevents double-scrolling in Treeviews.
+        tags = list(widget.bindtags())
+        if self.bindtag not in tags:
+            tags.insert(1, self.bindtag)
+            widget.bindtags(tuple(tags))
+
+        if not getattr(widget, "_scroll_router_destroy_bound", False):
+            widget.bind(
+                "<Destroy>",
+                lambda event, registered=widget: self._unregister(
+                    event, registered
+                ),
+                add="+",
+            )
+            widget._scroll_router_destroy_bound = True
+
+    def _unregister(self, event, widget):
+        if event.widget is widget:
+            self.registrations.pop(widget, None)
+
+    @staticmethod
+    def _units(event, linux_units=None):
+        if linux_units is not None:
+            return linux_units
+
+        import sys
+
+        try:
+            delta = int(event.delta)
+        except (AttributeError, TypeError, ValueError):
+            return 0
+        if delta == 0:
+            return 0
+
+        # macOS trackpads emit many small high-resolution events. Treat each as
+        # one unit instead of passing an unbounded delta to Tcl. Windows wheels
+        # normally use multiples of 120, with a sign fallback for touchpads.
+        direction = -1 if delta > 0 else 1
+        if sys.platform == "win32":
+            return direction * max(1, min(3, abs(delta) // 120))
+        return direction
+
+    @staticmethod
+    def _lineage(widget):
+        lineage = []
+        current = widget
+        while current is not None:
+            lineage.append(current)
+            current = getattr(current, "master", None)
+        return lineage
+
+    @staticmethod
+    def _can_scroll(scroll_command, horizontal, units):
+        owner = getattr(scroll_command, "__self__", None)
+        view_method = getattr(owner, "xview" if horizontal else "yview", None)
+        if not callable(view_method):
+            return True
+        try:
+            first, last = (float(value) for value in view_method())
+        except Exception:
+            # A widget can disappear between event dispatch and querying its
+            # viewport. Let Tk continue with its normal binding chain then.
+            return True
+        if last - first >= 0.999999:
+            return False
+        return first > 0.0 if units < 0 else last < 1.0
+
+    def _route(self, event, linux_units=None):
+        units = self._units(event, linux_units)
+        if units == 0:
+            return None
+
+        lineage = self._lineage(event.widget)
+        candidates = [
+            self.registrations[widget]
+            for widget in lineage
+            if widget in self.registrations
+        ]
+        seen = set()
+        for scroll_command, horizontal in candidates:
+            owner = getattr(scroll_command, "__self__", None)
+            key = (id(owner) if owner is not None else id(scroll_command), horizontal)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not self._can_scroll(scroll_command, horizontal, units):
+                continue
+            scroll_command(units, "units")
+            return "break"
+        return None
+
+
+def bind_scroll(widget, scroll_command, horizontal=False):
+    """Register smooth cross-platform wheel/trackpad scrolling.
+
+    Registration is idempotent and automatically covers current and future
+    descendants of ``widget`` through the application's shared scroll router.
+    """
+    root = widget._root()
+    router = getattr(root, "_mtga_scroll_router", None)
+    if router is None:
+        router = _ScrollRouter(root)
+        root._mtga_scroll_router = router
+    router.register(widget, scroll_command, horizontal=horizontal)
+    return router
