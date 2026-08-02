@@ -96,8 +96,7 @@ def test_compact_overlay_resizing_logic(mock_wm, mock_ov, root, mock_app_context
 
     with patch.object(overlay, "geometry") as mock_geom:
         overlay._do_resize(MotionEvent())
-        # The added dual-GIHWR columns keep the compact overlay at least 360px wide.
-        mock_geom.assert_called_with("360x650")
+        mock_geom.assert_called_with("350x650")
 
     # Stop resize should save geometry to config
     with patch("src.ui.windows.overlay.write_configuration") as mock_write:
@@ -115,7 +114,6 @@ def test_compact_overlay_update_data_population(
     # Force specific columns to test all mapping branches
     config.settings.column_configs["overlay_table"] = [
         "name",
-        "gihwr_all",
         "gihwr",
         "alsa",
         "count",
@@ -202,20 +200,36 @@ def test_compact_overlay_update_data_population(
 
 @patch("tkinter.Toplevel.overrideredirect")
 @patch("tkinter.Toplevel.wm_overrideredirect")
-def test_compact_overlay_shows_overall_gihwr_when_archetype_is_missing(
+def test_compact_overlay_combines_archetype_and_overall_gihwr(
     mock_wm, mock_ov, root, mock_app_context
 ):
-    """An off-archetype card keeps its overall rate beside a blank lane rate."""
+    """One compact cell shows archetype GIHWR followed by overall GIHWR."""
     config = Configuration()
-    config.settings.column_configs["overlay_table"] = ["name", "value", "gihwr"]
-    overlay = CompactOverlay(root, mock_app_context, config, lambda: None)
-
-    assert overlay.table_manager.active_fields == [
+    config.settings.column_configs["overlay_table"] = [
         "name",
         "value",
         "gihwr_all",
         "gihwr",
     ]
+    config.settings.column_display_orders["overlay_table"] = [
+        "name",
+        "value",
+        "gihwr_all",
+        "gihwr",
+    ]
+    config.settings.table_sort_states["pack"] = {
+        "column": "gihwr_all",
+        "reverse": True,
+    }
+    overlay = CompactOverlay(root, mock_app_context, config, lambda: None)
+
+    assert overlay.table_manager.active_fields == ["name", "value", "gihwr"]
+    assert config.settings.column_display_orders["overlay_table"] == [
+        "name",
+        "value",
+        "gihwr",
+    ]
+    assert config.settings.table_sort_states["pack"]["column"] == "gihwr"
 
     overlay.update_data(
         pack_cards=[
@@ -223,7 +237,15 @@ def test_compact_overlay_shows_overall_gihwr_when_archetype_is_missing(
                 "name": "Off-Lane Bomb",
                 "colors": ["R"],
                 "deck_colors": {"All Decks": {"gihwr": 63.4}},
-            }
+            },
+            {
+                "name": "On-Lane Card",
+                "colors": ["U"],
+                "deck_colors": {
+                    "All Decks": {"gihwr": 59.2},
+                    "UB": {"gihwr": 63.1},
+                },
+            },
         ],
         colors=["UB"],
         metrics=MagicMock(),
@@ -233,13 +255,15 @@ def test_compact_overlay_shows_overall_gihwr_when_archetype_is_missing(
     )
 
     tree = overlay.table_manager.tree
-    row_values = tree.item(tree.get_children()[0])["values"]
     fields = overlay.table_manager.active_fields
+    rows_by_name = {
+        tree.item(row)["values"][fields.index("name")]: tree.item(row)["values"]
+        for row in tree.get_children()
+    }
 
-    assert row_values[fields.index("gihwr_all")] == "63.4"
-    assert row_values[fields.index("gihwr")] == "-"
-    assert tree.heading("gihwr_all", "text") == "GIHWR ALL"
-    assert tree.heading("gihwr", "text") == "GIHWR UB"
+    assert rows_by_name["Off-Lane Bomb"][fields.index("gihwr")] == "- (63%)"
+    assert rows_by_name["On-Lane Card"][fields.index("gihwr")] == "63% (59%)"
+    assert tree.heading("gihwr", "text") == "GIHWR ▼"
 
 
 @patch("tkinter.Toplevel.overrideredirect")

@@ -4,7 +4,7 @@ import json
 from src import constants
 from src.set_metrics import SetMetrics
 from src.configuration import Configuration, Settings
-from src.card_logic import CardResult
+from src.card_logic import CardResult, field_process_sort
 from src.dataset import Dataset
 from src.tier_list import TierList, Meta, Rating
 from unittest.mock import MagicMock, patch
@@ -78,6 +78,11 @@ OTJ_GRADE_TESTS = [
         constants.LETTER_GRADE_B_PLUS,
     ),
 ]
+
+
+def test_compact_gihwr_sort_uses_archetype_then_overall_rate():
+    assert field_process_sort("63% (59%)") == (1, 63.0)
+    assert field_process_sort("- (62%)") == (0, 62.0)
 
 
 @pytest.fixture(name="card_result", scope="module")

@@ -58,7 +58,7 @@ class Settings(BaseModel):
     """This class holds UI settings"""
 
     table_width: int = 270
-    overlay_geometry: str = "360x600+50+50"
+    overlay_geometry: str = "300x600+50+50"
 
     main_window_geometry: str = "600x1080"
     paned_window_sash: int = 500
@@ -72,7 +72,7 @@ class Settings(BaseModel):
             "missing_table": ["name", "alsa"],
             "taken_table": ["name", "count", "gihwr"],
             "compare_table": ["name", "gihwr", "iwd"],
-            "overlay_table": ["name", "value", "gihwr_all", "gihwr"],
+            "overlay_table": ["name", "value", "gihwr"],
             "overlay_pool_table": ["name", "count", "gihwr"],
         }
     )
