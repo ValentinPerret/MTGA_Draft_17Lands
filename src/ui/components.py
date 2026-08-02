@@ -7,7 +7,7 @@ import tkinter
 from tkinter import ttk, messagebox
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
-import requests, io, math, re, threading, hashlib, os
+import requests, io, math, re, hashlib, os, queue
 from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
@@ -230,6 +230,8 @@ class CardToolTip(tkinter.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self._leave_id = None
+        self._image_results = queue.Queue()
+        self._image_poll_id = None
         try:
             self._build_ui(parent, card, images_enabled, scale)
         except Exception as e:
@@ -467,6 +469,13 @@ class CardToolTip(tkinter.Toplevel):
         self._close()
 
     def _close(self, event=None):
+        if self._image_poll_id is not None:
+            try:
+                self.after_cancel(self._image_poll_id)
+            except tkinter.TclError:
+                pass
+            self._image_poll_id = None
+
         if self._leave_id:
             try:
                 self.parent.unbind("<Leave>", self._leave_id)
@@ -524,20 +533,19 @@ class CardToolTip(tkinter.Toplevel):
 
         if cache_key in self._in_memory_images:
             # Memory Hit! Instant render.
-            self.after(0, lambda: self._apply_image(self._in_memory_images[cache_key]))
+            self._apply_image(self._in_memory_images[cache_key])
             return
 
+        # Only the Tk main thread polls this queue. Image workers must never
+        # call ``after`` or any other Tcl/Tk method directly.
+        self._image_poll_id = self.after(25, self._poll_image_results)
         self._image_executor.submit(self._fetch_and_apply_image, u, s, cache_key)
 
     def _fetch_and_apply_image(self, u, s, cache_key):
-        """Moved the core logic into a clean worker method"""
+        """Fetch and resize pixels in a worker without touching Tcl/Tk."""
         try:
             if not u:
-                if hasattr(self, "winfo_exists"):
-                    try:
-                        self.after(0, lambda: self._apply_error() if self.winfo_exists() else None)
-                    except RuntimeError:
-                        pass
+                self._image_results.put(("error", None))
                 return
             sn = cache_key + ".jpg"
             cp = os.path.join(self.IMAGE_CACHE_DIR, sn)
@@ -562,25 +570,32 @@ class CardToolTip(tkinter.Toplevel):
                 )
 
             CardToolTip._in_memory_images[cache_key] = im
+            self._image_results.put(("image", im))
+        except Exception:
+            self._image_results.put(("error", None))
 
-            # Safely route back to Tkinter Main Thread
-            if hasattr(self, "winfo_exists"):
-                try:
-                    self.after(
-                        0,
-                        lambda: self._apply_image(im) if self.winfo_exists() else None,
-                    )
-                except RuntimeError:
-                    pass
-        except Exception as e:
-            if hasattr(self, "winfo_exists"):
-                try:
-                    self.after(
-                        0,
-                        lambda: self._apply_error() if self.winfo_exists() else None,
-                    )
-                except RuntimeError:
-                    pass
+    def _poll_image_results(self):
+        """Apply completed image work from the Tk main event loop."""
+        self._image_poll_id = None
+        if not self.winfo_exists():
+            return
+
+        result = None
+        try:
+            while True:
+                result = self._image_results.get_nowait()
+        except queue.Empty:
+            pass
+
+        if result is not None:
+            kind, image = result
+            if kind == "image":
+                self._apply_image(image)
+            else:
+                self._apply_error()
+
+        if result is None and self.winfo_exists():
+            self._image_poll_id = self.after(25, self._poll_image_results)
 
     def _apply_image(self, im):
         if hasattr(self, "winfo_exists") and self.winfo_exists():

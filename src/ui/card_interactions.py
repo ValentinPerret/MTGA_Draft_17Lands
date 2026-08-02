@@ -23,7 +23,19 @@ class CardInteractionManager:
             if region not in ("tree", "cell"):
                 return
 
-        selection = table.selection()
+        clicked_row = (
+            table.identify_row(event.y)
+            if hasattr(event, "y") and hasattr(table, "identify_row")
+            else ""
+        )
+        if clicked_row:
+            # Widget-level ButtonRelease callbacks run before Treeview's class
+            # binding updates selection. Resolve the row under the pointer so
+            # the first click opens the card that was actually clicked.
+            table.selection_set(clicked_row)
+            selection = [clicked_row]
+        else:
+            selection = table.selection()
         if not selection:
             return
 

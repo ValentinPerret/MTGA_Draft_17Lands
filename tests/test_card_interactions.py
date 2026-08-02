@@ -23,6 +23,7 @@ class TestCardInteractions:
 
         mock_table = MagicMock()
         mock_table.identify_region.return_value = "cell"
+        mock_table.identify_row.return_value = "item1"
         mock_table.selection.return_value = ["item1"]
         mock_table.item.return_value = {"text": "Lightning Bolt"}
 
@@ -35,6 +36,7 @@ class TestCardInteractions:
 
         # Tooltip should trigger with the right card data
         mock_tooltip.assert_called_once()
+        mock_table.selection_set.assert_called_once_with("item1")
         assert mock_tooltip.call_args[0][1][DATA_FIELD_NAME] == "Lightning Bolt"
 
     @patch("src.ui.card_interactions.CardToolTip.create")
@@ -43,12 +45,14 @@ class TestCardInteractions:
 
         mock_table = MagicMock()
         mock_table.identify_region.return_value = "cell"
+        mock_table.identify_row.return_value = "item1"
         mock_table.selection.return_value = ["item1"]
         mock_table.item.return_value = {"text": "Giant Growth"}
 
         manager.on_card_select(MagicMock(x=10, y=10), mock_table, "missing")
 
         mock_tooltip.assert_called_once()
+        mock_table.selection_set.assert_called_once_with("item1")
         assert mock_tooltip.call_args[0][1][DATA_FIELD_NAME] == "Giant Growth"
 
     def test_context_menu_spawns(self, mock_app):

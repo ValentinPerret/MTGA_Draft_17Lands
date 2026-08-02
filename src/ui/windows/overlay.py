@@ -703,7 +703,16 @@ class CompactOverlay(tb.Toplevel):
             if region not in ("tree", "cell"):
                 return
 
-        selection = tree.selection()
+        clicked_row = (
+            tree.identify_row(event.y)
+            if hasattr(event, "y") and hasattr(tree, "identify_row")
+            else ""
+        )
+        if clicked_row:
+            tree.selection_set(clicked_row)
+            selection = [clicked_row]
+        else:
+            selection = tree.selection()
         if not selection:
             return
 
