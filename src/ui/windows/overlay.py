@@ -23,6 +23,9 @@ from src.configuration import write_configuration
 from src.card_logic import format_win_rate
 
 
+OVERALL_GIHWR_FIELD = "gihwr_all"
+
+
 class CompactOverlay(tb.Toplevel):
     def __init__(self, parent, app_context, configuration, on_restore):
         super().__init__(title="Mini Mode", topmost=True)
@@ -34,6 +37,8 @@ class CompactOverlay(tb.Toplevel):
         self.current_pack_cards = []
         self.current_pool_cards = []
 
+        self._ensure_pack_gihwr_columns()
+
         if "overlay_pool_table" not in self.configuration.settings.column_configs:
             self.configuration.settings.column_configs["overlay_pool_table"] = [
                 "name",
@@ -42,10 +47,11 @@ class CompactOverlay(tb.Toplevel):
             ]
 
         self.overrideredirect(True)
+        self.minsize(Theme.scaled_val(360), Theme.scaled_val(200))
         geom = getattr(
             self.configuration.settings,
             "overlay_geometry",
-            f"{Theme.scaled_val(380)}x{Theme.scaled_val(600)}+50+50",
+            f"{Theme.scaled_val(360)}x{Theme.scaled_val(600)}+50+50",
         )
         self.geometry(geom)
 
@@ -56,6 +62,40 @@ class CompactOverlay(tb.Toplevel):
 
         self._build_ui()
         self._sync_advisor_controls()
+
+    def _ensure_pack_gihwr_columns(self):
+        """Migrate saved mini-overlay columns to show both GIHWR contexts."""
+        configs = self.configuration.settings.column_configs
+        fields = list(configs.get("overlay_table", ["name", "value", "gihwr"]))
+
+        if "gihwr" not in fields:
+            fields.append("gihwr")
+        if OVERALL_GIHWR_FIELD not in fields:
+            fields.insert(fields.index("gihwr"), OVERALL_GIHWR_FIELD)
+
+        # Preserve user ordering while removing malformed duplicate entries.
+        configs["overlay_table"] = list(dict.fromkeys(fields))
+
+    def _update_pack_gihwr_headers(self, active_filter):
+        """Make the overall and archetype scopes explicit in compact headers."""
+        tree = self.table_manager.tree
+        labels = {
+            OVERALL_GIHWR_FIELD: "GIHWR ALL",
+            "gihwr": (
+                f"GIHWR {active_filter}"
+                if active_filter and active_filter != constants.FILTER_OPTION_ALL_DECKS
+                else "GIHWR ARCH"
+            ),
+        }
+        for field, label in labels.items():
+            if field not in tree["columns"]:
+                continue
+            tree.base_labels[field] = label
+            display_text = label
+            if tree.active_sort_column == field:
+                reverse = tree.column_sort_state.get(field, False)
+                display_text = f"{label} {'▼' if reverse else '▲'}"
+            tree.heading(field, text=display_text)
 
     def _start_move(self, event):
         self.x = event.x
@@ -81,7 +121,7 @@ class CompactOverlay(tb.Toplevel):
 
     def _do_resize(self, event):
         new_w = max(
-            Theme.scaled_val(250), self._start_w + (event.x_root - self._start_x)
+            Theme.scaled_val(360), self._start_w + (event.x_root - self._start_x)
         )
         new_h = max(
             Theme.scaled_val(200), self._start_h + (event.y_root - self._start_y)
@@ -202,6 +242,7 @@ class CompactOverlay(tb.Toplevel):
             height=1,
         )
         self.table_manager.pack(fill=BOTH, expand=True)
+        self._update_pack_gihwr_headers(constants.FILTER_OPTION_ALL_DECKS)
 
         # Missing Table (Hidden initially)
         self.missing_frame = tb.Frame(self.tab_pack)
@@ -527,6 +568,7 @@ class CompactOverlay(tb.Toplevel):
 
         # Update Tables
         active_filter = colors[0] if colors else "All Decks"
+        self._update_pack_gihwr_headers(active_filter)
         rec_map = {r.card_name: r for r in (recommendations or [])}
 
         def _populate_tree(
@@ -603,6 +645,21 @@ class CompactOverlay(tb.Toplevel):
                             f"{rec.wheel_chance:.0f}%"
                             if rec and rec.wheel_chance > 0
                             else "-"
+                        )
+                    elif field == OVERALL_GIHWR_FIELD:
+                        overall_val = (
+                            card.get("deck_colors", {})
+                            .get(constants.FILTER_OPTION_ALL_DECKS, {})
+                            .get(constants.DATA_FIELD_GIHWR, 0.0)
+                        )
+                        row_values.append(
+                            format_win_rate(
+                                overall_val,
+                                constants.FILTER_OPTION_ALL_DECKS,
+                                constants.DATA_FIELD_GIHWR,
+                                metrics,
+                                self.configuration.settings.result_format,
+                            )
                         )
                     elif "TIER" in field:
                         tier_obj = tier_data.get(field) if tier_data else None

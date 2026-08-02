@@ -96,8 +96,8 @@ def test_compact_overlay_resizing_logic(mock_wm, mock_ov, root, mock_app_context
 
     with patch.object(overlay, "geometry") as mock_geom:
         overlay._do_resize(MotionEvent())
-        # Width: 300 + (550 - 500) = 350. Height: 600 + (550 - 500) = 650.
-        mock_geom.assert_called_with("350x650")
+        # The added dual-GIHWR columns keep the compact overlay at least 360px wide.
+        mock_geom.assert_called_with("360x650")
 
     # Stop resize should save geometry to config
     with patch("src.ui.windows.overlay.write_configuration") as mock_write:
@@ -115,6 +115,7 @@ def test_compact_overlay_update_data_population(
     # Force specific columns to test all mapping branches
     config.settings.column_configs["overlay_table"] = [
         "name",
+        "gihwr_all",
         "gihwr",
         "alsa",
         "count",
@@ -197,6 +198,48 @@ def test_compact_overlay_update_data_population(
     # Verify 'Picked' formatting
     counterspell_tags = tree.item(rows[1])["tags"]
     assert "picked" in counterspell_tags
+
+
+@patch("tkinter.Toplevel.overrideredirect")
+@patch("tkinter.Toplevel.wm_overrideredirect")
+def test_compact_overlay_shows_overall_gihwr_when_archetype_is_missing(
+    mock_wm, mock_ov, root, mock_app_context
+):
+    """An off-archetype card keeps its overall rate beside a blank lane rate."""
+    config = Configuration()
+    config.settings.column_configs["overlay_table"] = ["name", "value", "gihwr"]
+    overlay = CompactOverlay(root, mock_app_context, config, lambda: None)
+
+    assert overlay.table_manager.active_fields == [
+        "name",
+        "value",
+        "gihwr_all",
+        "gihwr",
+    ]
+
+    overlay.update_data(
+        pack_cards=[
+            {
+                "name": "Off-Lane Bomb",
+                "colors": ["R"],
+                "deck_colors": {"All Decks": {"gihwr": 63.4}},
+            }
+        ],
+        colors=["UB"],
+        metrics=MagicMock(),
+        tier_data={},
+        current_pick=1,
+        recommendations=[],
+    )
+
+    tree = overlay.table_manager.tree
+    row_values = tree.item(tree.get_children()[0])["values"]
+    fields = overlay.table_manager.active_fields
+
+    assert row_values[fields.index("gihwr_all")] == "63.4"
+    assert row_values[fields.index("gihwr")] == "-"
+    assert tree.heading("gihwr_all", "text") == "GIHWR ALL"
+    assert tree.heading("gihwr", "text") == "GIHWR UB"
 
 
 @patch("tkinter.Toplevel.overrideredirect")
