@@ -7,7 +7,7 @@ import pytest
 import tkinter
 import time
 from unittest.mock import MagicMock, patch
-from src.ui.windows.suggest_deck import SuggestDeckPanel
+from src.ui.windows.suggest_deck import SuggestDeckPanel, group_deck_by_cmc
 from src.configuration import Configuration
 from src import constants
 
@@ -117,6 +117,65 @@ class TestSuggestDeckPanel:
 
             # Verify table has Etali
             assert panel.current_deck_list[0]["name"] == "Etali"
+
+    def test_visual_deck_button_toggles_curve_view(
+        self, root, mock_draft, mock_variants
+    ):
+        panel = SuggestDeckPanel(root, mock_draft, Configuration())
+        assert str(panel.btn_visual_deck["state"]) == "disabled"
+
+        panel.suggestions = mock_variants
+        panel._render_deck("BG Consistent")
+        assert str(panel.btn_visual_deck["state"]) == "normal"
+
+        panel._toggle_deck_view()
+        assert panel.deck_view_mode == "visual"
+        assert panel.table_manager.winfo_manager() == ""
+        assert panel.deck_visual_frame.winfo_manager() != ""
+        assert panel.btn_visual_deck.cget("text") == "List Deck"
+
+        panel._toggle_deck_view()
+        assert panel.deck_view_mode == "list"
+        assert panel.table_manager.winfo_manager() != ""
+        assert panel.deck_visual_frame.winfo_manager() == ""
+        assert panel.btn_visual_deck.cget("text") == "Visual Deck"
+
+    def test_visual_deck_renders_every_cmc_column(
+        self, root, mock_draft, mock_variants
+    ):
+        panel = SuggestDeckPanel(root, mock_draft, Configuration())
+        panel.suggestions = mock_variants
+        panel._render_deck("BG Consistent")
+        panel._toggle_deck_view()
+
+        columns = panel.deck_visual_scroller.scrollable_frame.winfo_children()
+        assert len(columns) == 7
+        assert "1 cards" in panel.lbl_visual_summary.cget("text")
+
+    def test_group_deck_by_functional_cmc_preserves_counts(self):
+        cards = [
+            {"name": "Plains", "types": ["Land"], "cmc": 0, "count": 8},
+            {"name": "One Drop", "types": ["Creature"], "cmc": 1, "count": 2},
+            {
+                "name": "Disguise Card",
+                "types": ["Creature"],
+                "cmc": 5,
+                "oracle_text": "You may cast this face down as a 2/2 creature.",
+                "count": 3,
+            },
+            {"name": "Finisher", "types": ["Creature"], "cmc": 7, "count": 1},
+        ]
+
+        buckets = group_deck_by_cmc(cards)
+
+        assert buckets["Lands"] == [cards[0]]
+        assert buckets["1"] == [cards[1]]
+        assert buckets["3"] == [cards[2]]
+        assert buckets["6+"] == [cards[3]]
+        assert (
+            sum(card["count"] for bucket in buckets.values() for card in bucket)
+            == 14
+        )
 
     def test_builder_results_return_through_tk_main_thread(
         self, root, mock_draft, mock_variants

@@ -22,9 +22,36 @@ from PIL import Image, ImageTk
 from src import constants
 from src.card_logic import copy_deck, get_strict_colors, is_castable, get_functional_cmc
 from src.ui.styles import Theme
-from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.components import (
+    DynamicTreeviewManager,
+    CardToolTip,
+    AutoScrollbar,
+    ScrolledFrame,
+    CardPile,
+)
 from src.ui.main_thread import MainThreadDispatcher
 from src.utils import bind_scroll
+
+
+def group_deck_by_cmc(deck_cards: List[Dict]) -> Dict[str, List[Dict]]:
+    """Group a stacked deck list into practical mana-curve columns."""
+    buckets = {key: [] for key in ("Lands", "1", "2", "3", "4", "5", "6+")}
+
+    for card in deck_cards:
+        if constants.CARD_TYPE_LAND in card.get(constants.DATA_FIELD_TYPES, []):
+            buckets["Lands"].append(card)
+            continue
+
+        cmc = get_functional_cmc(card)
+        if cmc <= 1:
+            key = "1"
+        elif cmc >= 6:
+            key = "6+"
+        else:
+            key = str(cmc)
+        buckets[key].append(card)
+
+    return buckets
 
 
 class SuggestDeckPanel(ttk.Frame):
@@ -47,6 +74,7 @@ class SuggestDeckPanel(ttk.Frame):
         self.current_deck_list: List[Dict] = []
         self.current_sb_list: List[Dict] = []
         self.current_archetype_key: str = ""
+        self.deck_view_mode = "list"
 
         self.is_building = False
 
@@ -110,6 +138,16 @@ class SuggestDeckPanel(ttk.Frame):
         )
         self.btn_copy.pack(side="right", padx=Theme.scaled_val(5))
 
+        self.btn_visual_deck = ttk.Button(
+            self.arch_frame,
+            text="Visual Deck",
+            width=12,
+            bootstyle="info-outline",
+            command=self._toggle_deck_view,
+            state="disabled",
+        )
+        self.btn_visual_deck.pack(side="right", padx=Theme.scaled_val(5))
+
         if self.on_export_custom:
             self.btn_export_builder = ttk.Button(
                 self.arch_frame,
@@ -150,6 +188,18 @@ class SuggestDeckPanel(ttk.Frame):
             static_columns=cols,
         )
         self.table_manager.pack(fill="both", expand=True)
+
+        self.deck_visual_frame = ttk.Frame(self.deck_frame)
+        self.lbl_visual_summary = ttk.Label(
+            self.deck_visual_frame,
+            text="",
+            font=Theme.scaled_font(9),
+            bootstyle="secondary",
+            padding=Theme.scaled_val((8, 6)),
+        )
+        self.lbl_visual_summary.pack(fill="x")
+        self.deck_visual_scroller = ScrolledFrame(self.deck_visual_frame)
+        self.deck_visual_scroller.pack(fill="both", expand=True)
 
         # Sideboard Tab
         self.sb_frame = ttk.Frame(self.notebook, padding=Theme.scaled_val(2))
@@ -341,6 +391,15 @@ class SuggestDeckPanel(ttk.Frame):
         self.current_deck_list = []
         self.current_sb_list = []
 
+        visual_scroller = getattr(self, "deck_visual_scroller", None)
+        if visual_scroller and visual_scroller.winfo_exists():
+            for widget in visual_scroller.scrollable_frame.winfo_children():
+                widget.destroy()
+
+        visual_button = getattr(self, "btn_visual_deck", None)
+        if visual_button and visual_button.winfo_exists():
+            visual_button.configure(state="disabled")
+
         notebook = getattr(self, "notebook", None)
         deck_frame = getattr(self, "deck_frame", None)
         if notebook and deck_frame:
@@ -354,6 +413,74 @@ class SuggestDeckPanel(ttk.Frame):
         if "SIMULATION & SAMPLE HAND" in current_tab:
             # Automatically draw a fresh hand when viewing the tab to ensure it's always responsive
             self._draw_sample_hand()
+
+    def _toggle_deck_view(self):
+        """Switch the recommended main deck between list and mana-curve views."""
+        if not self.current_deck_list:
+            return
+
+        self.notebook.select(self.deck_frame)
+        if self.deck_view_mode == "list":
+            self.deck_view_mode = "visual"
+            self.table_manager.pack_forget()
+            self.deck_visual_frame.pack(fill="both", expand=True)
+            self.btn_visual_deck.configure(text="List Deck")
+            self._render_visual_deck()
+        else:
+            self.deck_view_mode = "list"
+            self.deck_visual_frame.pack_forget()
+            self.table_manager.pack(fill="both", expand=True)
+            self.btn_visual_deck.configure(text="Visual Deck")
+
+    def _render_visual_deck(self):
+        """Render the current recommendation as horizontally scrollable CMC piles."""
+        scroller = getattr(self, "deck_visual_scroller", None)
+        if not scroller or not scroller.winfo_exists():
+            return
+
+        for widget in scroller.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        buckets = group_deck_by_cmc(self.current_deck_list)
+        total_cards = sum(int(card.get("count", 1)) for card in self.current_deck_list)
+        land_cards = sum(
+            int(card.get("count", 1)) for card in buckets["Lands"]
+        )
+        self.lbl_visual_summary.configure(
+            text=(
+                f"{total_cards} cards  •  {total_cards - land_cards} spells  •  "
+                f"{land_cards} lands  •  Grouped by practical casting cost"
+            )
+        )
+
+        for key in ("Lands", "1", "2", "3", "4", "5", "6+"):
+            card_list = buckets[key]
+            card_count = sum(int(card.get("count", 1)) for card in card_list)
+            title = (
+                f"LANDS · {card_count}"
+                if key == "Lands"
+                else f"CMC {key} · {card_count}"
+            )
+
+            pile_frame = ttk.Frame(scroller.scrollable_frame)
+            pile_frame.pack(
+                side="left",
+                fill="y",
+                padx=Theme.scaled_val(4),
+                pady=Theme.scaled_val(5),
+                anchor="n",
+            )
+            pile = CardPile(pile_frame, title=title, app_instance=self)
+            pile.pack(fill="both", expand=True)
+
+            for card in sorted(
+                card_list,
+                key=lambda value: (
+                    value.get(constants.DATA_FIELD_COLORS, []),
+                    value.get(constants.DATA_FIELD_NAME, ""),
+                ),
+            ):
+                pile.add_card(card)
 
     def _run_monte_carlo_task(self, deck_list):
         self.ui_dispatcher.post(self._show_sim_loading)
@@ -1156,6 +1283,9 @@ class SuggestDeckPanel(ttk.Frame):
         if sb_table:
             populate_tree(self.sb_manager, self.current_sb_list, True)
 
+        if self.deck_view_mode == "visual":
+            self._render_visual_deck()
+
     def _render_deck_stats(self):
         stats_frame = getattr(self, "stats_frame", None)
         if not stats_frame or not stats_frame.winfo_exists():
@@ -1323,6 +1453,9 @@ class SuggestDeckPanel(ttk.Frame):
 
         self.current_deck_list.sort(key=card_sort_key)
         self.current_sb_list.sort(key=card_sort_key)
+
+        if self.current_deck_list:
+            self.btn_visual_deck.configure(state="normal")
 
         breakdown = data.get("breakdown", "")
         if hasattr(self, "lbl_deck_notes") and self.lbl_deck_notes.winfo_exists():
