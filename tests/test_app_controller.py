@@ -159,3 +159,21 @@ class TestAppController:
 
         # It SHOULD have rescheduled itself to try again in 100ms
         mock_app.root.after.assert_called_once_with(100, controller.refresh_ui_data)
+
+    def test_scanner_backed_tabs_follow_practice_scanner(self, mock_app):
+        """A scanner swap must update every tab that reads pool/deck state."""
+        controller = AppController(mock_app)
+        practice_scanner = MagicMock(name="practice_scanner")
+
+        panels = [
+            mock_app.panel_taken,
+            mock_app.panel_suggest,
+            mock_app.panel_custom,
+            mock_app.panel_compare,
+        ]
+        for panel in panels:
+            panel.draft = MagicMock(name="live_scanner")
+
+        controller._bind_scanner_backed_views(practice_scanner)
+
+        assert all(panel.draft is practice_scanner for panel in panels)

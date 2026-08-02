@@ -37,8 +37,8 @@ class TestSettingsWindow:
         assert window.vars["result_format"].get() == constants.RESULT_FORMAT_WIN_RATE
         assert window.vars["filter_format"].get() == constants.DECK_FILTER_FORMAT_COLORS
         assert window.vars["ui_size"].get() == constants.UI_SIZE_DEFAULT
-        assert window.vars["advisor_engine"].get() == "legacy"
-        assert window.vars["model_assistance_enabled"].get() == 0
+        assert window.vars["advisor_engine"].get() == "contextual_v2"
+        assert window.vars["model_assistance_enabled"].get() == 1
         assert window.vars["model_call_limit"].get() == 10
 
         # Check integer conversion for booleans (True -> 1)

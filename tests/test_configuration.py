@@ -145,8 +145,8 @@ def test_get_config_path():
 
 def test_contextual_advisor_configuration_defaults_and_validation():
     config = Configuration()
-    assert config.settings.advisor_engine == "legacy"
-    assert config.model_assistance.enabled is False
+    assert config.settings.advisor_engine == "contextual_v2"
+    assert config.model_assistance.enabled is True
     assert config.model_assistance.provider == "codex"
     assert config.model_assistance.request_timeout_seconds == 12.0
     assert config.model_assistance.automatic_call_limit_per_draft == 10
@@ -154,4 +154,4 @@ def test_contextual_advisor_configuration_defaults_and_validation():
     invalid = Configuration.model_validate(
         {"settings": {"advisor_engine": "unknown"}}
     )
-    assert invalid.settings.advisor_engine == "legacy"
+    assert invalid.settings.advisor_engine == "contextual_v2"

@@ -221,15 +221,31 @@ class CardToolTip(tkinter.Toplevel):
 
     @classmethod
     def create(cls, parent, card, images_enabled, scale):
-        """Factory method ensures only one tooltip exists globally and avoids flickering loops."""
-        if cls._active_tooltip and cls._active_tooltip.winfo_exists():
-            cls._active_tooltip._close()
-        cls._active_tooltip = cls(parent, card, images_enabled, scale)
+        """Show one persistent card preview, replacing any previous preview."""
+        previous = cls._active_tooltip
+        cls._active_tooltip = None
+        if previous is not None:
+            try:
+                if previous.winfo_exists():
+                    previous._close()
+            except tkinter.TclError:
+                pass
+
+        tooltip = cls(parent, card, images_enabled, scale)
+        try:
+            if tooltip.winfo_exists():
+                cls._active_tooltip = tooltip
+        except tkinter.TclError:
+            pass
 
     def __init__(self, parent, card, images_enabled, scale):
         super().__init__(parent)
         self.parent = parent
-        self._leave_id = None
+        self._owner = None
+        self._owner_bind_after_id = None
+        self._owner_click_id = None
+        self._owner_escape_id = None
+        self._owner_destroy_id = None
         self._image_results = queue.Queue()
         self._image_poll_id = None
         try:
@@ -251,6 +267,12 @@ class CardToolTip(tkinter.Toplevel):
             self.withdraw()
             self.destroy()
             return
+
+        # Record the anchor before constructing image widgets. An in-memory
+        # cache hit applies the image synchronously and repositions the popup,
+        # so these coordinates must exist before ``_load_image_async`` runs.
+        self._mouse_x = parent.winfo_pointerx()
+        self._mouse_y = parent.winfo_pointery()
 
         self.transient(parent.winfo_toplevel())
         self.wm_overrideredirect(True)
@@ -274,6 +296,8 @@ class CardToolTip(tkinter.Toplevel):
         name = card.get("name", "Unknown")
         stats = card.get("deck_colors", {})
         urls = card.get("image", [])
+        if isinstance(urls, str):
+            urls = [urls]
         tags = card.get("tags", [])
         rarity = str(card.get("rarity") or "common").capitalize()
 
@@ -431,13 +455,17 @@ class CardToolTip(tkinter.Toplevel):
                 justify="left",
             ).pack(anchor="w")
 
-        # Anchor to the mouse position AT THE TIME OF CREATION
-        self._mouse_x = parent.winfo_pointerx()
-        self._mouse_y = parent.winfo_pointery()
+        # Reposition once more after every text/stat widget has been measured.
         self._reposition()
 
-        # Bind closing interactions securely
-        self._leave_id = self.parent.bind("<Leave>", self._on_parent_leave, add="+")
+        # A click preview should not disappear because macOS briefly reports a
+        # pointer-leave while focus/topmost windows are changing. Install the
+        # outside-click binding after the opening event has fully completed.
+        self._owner = parent.winfo_toplevel()
+        self._owner_destroy_id = self._owner.bind(
+            "<Destroy>", self._on_owner_destroy, add="+"
+        )
+        self._owner_bind_after_id = self.after_idle(self._bind_owner_close_actions)
         self.bind("<Button-1>", self._close)
 
         self.deiconify()  # Show the window instantly now that geometry is calculated
@@ -455,20 +483,32 @@ class CardToolTip(tkinter.Toplevel):
             self._reposition()
             self.lift()
 
-    def _on_parent_leave(self, event):
+    def _bind_owner_close_actions(self):
+        self._owner_bind_after_id = None
         try:
-            x, y = self.winfo_pointerx(), self.winfo_pointery()
-            rx, ry = self.parent.winfo_rootx(), self.parent.winfo_rooty()
-            rw, rh = self.parent.winfo_width(), self.parent.winfo_height()
-
-            if rx <= x <= rx + rw and ry <= y <= ry + rh:
+            if not self.winfo_exists() or self._owner is None:
                 return
-        except Exception:
-            pass
+            self._owner_click_id = self._owner.bind(
+                "<Button-1>", self._close, add="+"
+            )
+            self._owner_escape_id = self._owner.bind(
+                "<Escape>", self._close, add="+"
+            )
+        except tkinter.TclError:
+            return
 
-        self._close()
+    def _on_owner_destroy(self, event):
+        if event.widget is self._owner:
+            self._close()
 
     def _close(self, event=None):
+        if self._owner_bind_after_id is not None:
+            try:
+                self.after_cancel(self._owner_bind_after_id)
+            except tkinter.TclError:
+                pass
+            self._owner_bind_after_id = None
+
         if self._image_poll_id is not None:
             try:
                 self.after_cancel(self._image_poll_id)
@@ -476,15 +516,31 @@ class CardToolTip(tkinter.Toplevel):
                 pass
             self._image_poll_id = None
 
-        if self._leave_id:
-            try:
-                self.parent.unbind("<Leave>", self._leave_id)
-            except Exception:
-                pass
-            self._leave_id = None
+        for sequence, binding_name in (
+            ("<Button-1>", "_owner_click_id"),
+            ("<Escape>", "_owner_escape_id"),
+            ("<Destroy>", "_owner_destroy_id"),
+        ):
+            binding_id = getattr(self, binding_name, None)
+            if binding_id and self._owner is not None:
+                try:
+                    self._owner.unbind(sequence, binding_id)
+                except (AttributeError, tkinter.TclError):
+                    pass
+                setattr(self, binding_name, None)
 
-        if self.winfo_exists():
-            self.destroy()
+        if CardToolTip._active_tooltip is self:
+            CardToolTip._active_tooltip = None
+
+        try:
+            exists = self.winfo_exists()
+        except tkinter.TclError:
+            exists = False
+        if exists:
+            try:
+                self.destroy()
+            except tkinter.TclError:
+                pass
 
     def _reposition(self):
         """Calculates bounds using the static initial mouse position so the tooltip doesn't teleport."""

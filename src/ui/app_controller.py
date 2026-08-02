@@ -227,29 +227,34 @@ class AppController:
         if not self.app._initialized or self.app._rebuilding_ui:
             return
 
-        lock_acquired = self.orchestrator.scanner.lock.acquire(blocking=False)
+        # Keep one scanner for the entire render. Practice mode and live-draft
+        # detection can swap ``orchestrator.scanner`` between event-loop ticks;
+        # mixing both scanners in one snapshot produces empty or inconsistent
+        # views and can even release the wrong lock.
+        scanner = self.orchestrator.scanner
+        lock_acquired = scanner.lock.acquire(blocking=False)
         if not lock_acquired:
             self.root.after(100, self.refresh_ui_data)
             return
 
         try:
             # SNAPSHOT STATE
-            es, et = self.orchestrator.scanner.retrieve_current_limited_event()
-            pk, pi = self.orchestrator.scanner.retrieve_current_pack_and_pick()
-            metrics = self.orchestrator.scanner.retrieve_set_metrics()
-            tier_data = self.orchestrator.scanner.retrieve_tier_data()
-            taken_cards = self.orchestrator.scanner.retrieve_taken_cards()
-            pack_cards = self.orchestrator.scanner.retrieve_current_pack_cards()
-            missing_cards = self.orchestrator.scanner.retrieve_current_missing_cards()
-            current_picked_cards = (
-                self.orchestrator.scanner.retrieve_current_picked_cards()
-            )
-            history = self.orchestrator.scanner.retrieve_draft_history()
-            draft_id = self.orchestrator.scanner.current_draft_id
-            start_time = self.orchestrator.scanner.draft_start_time
-            event_string = self.orchestrator.scanner.event_string
+            es, et = scanner.retrieve_current_limited_event()
+            pk, pi = scanner.retrieve_current_pack_and_pick()
+            metrics = scanner.retrieve_set_metrics()
+            tier_data = scanner.retrieve_tier_data()
+            taken_cards = scanner.retrieve_taken_cards()
+            pack_cards = scanner.retrieve_current_pack_cards()
+            missing_cards = scanner.retrieve_current_missing_cards()
+            current_picked_cards = scanner.retrieve_current_picked_cards()
+            history = scanner.retrieve_draft_history()
+            draft_id = scanner.current_draft_id
+            start_time = scanner.draft_start_time
+            event_string = scanner.event_string
         finally:
-            self.orchestrator.scanner.lock.release()
+            scanner.lock.release()
+
+        self._bind_scanner_backed_views(scanner)
 
         # ADVISOR & SIGNAL MATH
         sig_calc = SignalCalculator(metrics)
@@ -257,12 +262,12 @@ class AppController:
         for entry in history:
             if entry["Pack"] == 2:
                 continue
-            h_pack = self.orchestrator.scanner.set_data.get_data_by_id(entry["Cards"])
+            h_pack = scanner.set_data.get_data_by_id(entry["Cards"])
             for c, v in sig_calc.calculate_pack_signals(h_pack, entry["Pick"]).items():
                 scores[c] += v
 
         try:
-            detailed_logs = self.orchestrator.scanner.detailed_logs_enabled()
+            detailed_logs = scanner.detailed_logs_enabled()
         except Exception:
             detailed_logs = None
 
@@ -379,6 +384,23 @@ class AppController:
 
         self.app.current_pack_data = pack_cards
         self.app.current_missing_data = missing_cards
+
+    def _bind_scanner_backed_views(self, scanner):
+        """Point data tabs at the scanner used for this refresh snapshot.
+
+        The panels are constructed with the live scanner, while practice mode
+        intentionally swaps in an isolated scanner. Rebinding here keeps the
+        card pool and deck tools aligned with the dashboard in both directions.
+        """
+        for panel_name in (
+            "panel_taken",
+            "panel_suggest",
+            "panel_custom",
+            "panel_compare",
+        ):
+            panel = getattr(self.app, panel_name, None)
+            if panel is not None and hasattr(panel, "draft"):
+                panel.draft = scanner
 
     def _apply_optional_codex_review(
         self,

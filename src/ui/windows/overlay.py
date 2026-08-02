@@ -55,6 +55,7 @@ class CompactOverlay(tb.Toplevel):
             pass
 
         self._build_ui()
+        self._sync_advisor_controls()
 
     def _start_move(self, event):
         self.x = event.x
@@ -362,17 +363,24 @@ class CompactOverlay(tb.Toplevel):
             "legacy" if current == "contextual_v2" else "contextual_v2"
         )
         write_configuration(self.configuration)
-        self.btn_engine.configure(
-            text="V2"
-            if self.configuration.settings.advisor_engine == "contextual_v2"
-            else "V1"
-        )
+        self._sync_advisor_controls()
         self.orchestrator.request_math_update()
 
     def _disable_model_assistance(self):
         self.configuration.model_assistance.enabled = False
         write_configuration(self.configuration)
+        self._sync_advisor_controls()
         self.orchestrator.request_math_update()
+
+    def _sync_advisor_controls(self):
+        """Make the compact controls communicate their active availability."""
+        use_v2 = self.configuration.settings.advisor_engine == "contextual_v2"
+        ai_enabled = use_v2 and self.configuration.model_assistance.enabled
+        self.btn_engine.configure(text="V2" if use_v2 else "V1")
+        self.btn_analyze.configure(
+            state=tkinter.NORMAL if ai_enabled else tkinter.DISABLED,
+            bootstyle="primary-link" if ai_enabled else "secondary-link",
+        )
 
     def _analyze_deeper(self):
         if hasattr(self.app_context, "controller"):
@@ -402,6 +410,7 @@ class CompactOverlay(tb.Toplevel):
         picked_cards=None,
         scores=None,
     ):
+        self._sync_advisor_controls()
         evt = self.app_context.vars["selected_event"].get()
         grp = self.app_context.vars["selected_group"].get()
         filt = self.app_context.vars["deck_filter"].get()

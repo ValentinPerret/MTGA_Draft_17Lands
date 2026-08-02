@@ -235,6 +235,15 @@ class DraftApp:
                 self.top_bar.update_deck_filter_options()
             if key in ["result_format", "card_colors_enabled"] or key is None:
                 self._refresh_ui_data()
+            if key in [
+                "advisor_engine",
+                "model_assistance_enabled",
+                "model_name",
+                "model_call_limit",
+            ] or key is None:
+                self.orchestrator.request_math_update()
+                if self.overlay_window:
+                    self.overlay_window._sync_advisor_controls()
             if (
                 key == "arena_log_location"
                 and s.arena_log_location

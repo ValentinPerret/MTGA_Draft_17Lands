@@ -75,3 +75,64 @@ def test_tooltip_image_is_applied_by_tk_event_loop(tmp_path):
             root.destroy()
         except tkinter.TclError:
             pass
+
+
+def test_card_preview_persists_until_next_owner_click():
+    root = tkinter.Tk()
+    Theme.apply(root, "Dark")
+    card = {
+        "name": "Persistent Preview",
+        "types": ["Creature"],
+        "deck_colors": {},
+    }
+    try:
+        CardToolTip.create(root, card, images_enabled=False, scale=1.0)
+        tooltip = CardToolTip._active_tooltip
+        root.update()
+
+        root.event_generate("<Leave>")
+        root.update()
+        assert tooltip.winfo_exists()
+
+        root.event_generate("<Button-1>", x=5, y=5)
+        root.update()
+        assert not tooltip.winfo_exists()
+        assert CardToolTip._active_tooltip is None
+    finally:
+        CardToolTip._active_tooltip = None
+        try:
+            root.destroy()
+        except tkinter.TclError:
+            pass
+
+
+def test_in_memory_image_hit_has_anchor_before_synchronous_render():
+    root = tkinter.Tk()
+    Theme.apply(root, "Dark")
+    url = "https://example.test/in-memory-card.jpg"
+    cache_key = hashlib.md5(url.encode("utf-8")).hexdigest()
+    CardToolTip._in_memory_images[cache_key] = Image.new("RGB", (80, 112), "#884422")
+    card = {
+        "name": "Cached Preview",
+        "types": ["Creature"],
+        "image": [url],
+        "deck_colors": {},
+    }
+    try:
+        CardToolTip.create(root, card, images_enabled=True, scale=1.0)
+        tooltip = CardToolTip._active_tooltip
+        root.update()
+
+        assert tooltip is not None
+        assert tooltip.winfo_exists()
+        assert hasattr(tooltip, "_mouse_x")
+        assert hasattr(tooltip, "tk_img")
+    finally:
+        if CardToolTip._active_tooltip is not None:
+            CardToolTip._active_tooltip._close()
+        CardToolTip._active_tooltip = None
+        CardToolTip._in_memory_images.clear()
+        try:
+            root.destroy()
+        except tkinter.TclError:
+            pass

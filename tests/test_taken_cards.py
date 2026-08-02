@@ -184,10 +184,13 @@ class TestTakenCardsPanel:
             y = 10
 
         panel.table.identify_region = MagicMock(return_value="cell")
+        panel.table.identify_row = MagicMock(return_value="item1")
+        panel.table.selection_set = MagicMock()
         panel.table.selection = MagicMock(return_value=["item1"])
         panel.table.item = MagicMock(return_value={"text": "Aven"})
 
         panel._on_selection(MockEvent())
 
         mock_tooltip.assert_called_once()
+        panel.table.selection_set.assert_called_once_with("item1")
         assert mock_tooltip.call_args[0][1]["name"] == "Aven"

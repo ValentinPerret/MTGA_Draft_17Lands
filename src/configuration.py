@@ -96,7 +96,7 @@ class Settings(BaseModel):
     missing_notifications_enabled: bool = True
     auto_sync_datasets: bool = True
     show_splash_screen: bool = True
-    advisor_engine: str = "legacy"
+    advisor_engine: str = "contextual_v2"
 
     # System Paths (Restored)
     arena_log_location: str = ""
@@ -199,7 +199,7 @@ class ModelAssistance(BaseModel):
     blank model lets Codex select its current recommended default.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     provider: str = "codex"
     model: str = ""
     automatic_call_limit_per_draft: int = Field(default=10, ge=0, le=50)

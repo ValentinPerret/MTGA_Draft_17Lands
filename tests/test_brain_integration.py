@@ -125,6 +125,10 @@ class TestBrainIntegration:
         root = tkinter.Tk()
         root.withdraw()
         config = Configuration()
+        # These scenarios intentionally verify V1's Pro Tour scoring rules.
+        # The product default is V2, so keep this legacy-engine suite explicit.
+        config.settings.advisor_engine = "legacy"
+        config.model_assistance.enabled = False
         config.settings.arena_log_location = str(log_file)
 
         # PATCH: check_file_integrity to allow small datasets (the mock has <100 cards)
