@@ -86,6 +86,32 @@ def test_orchestrator_flags(orchestrator):
     assert orchestrator.toggle_paused() is False
 
 
+def test_forced_scan_always_reports_completion(orchestrator):
+    """An unchanged deep scan must still release the UI loading overlay."""
+    orchestrator.trigger_full_scan()
+    orchestrator.check_for_updates = MagicMock(return_value=False)
+
+    orchestrator.step_process()
+
+    assert orchestrator.update_queue.get_nowait() == {
+        "event": "scan_complete",
+        "success": True,
+    }
+
+
+def test_forced_scan_reports_failure(orchestrator):
+    """A failed deep scan also releases the overlay with an error state."""
+    orchestrator.trigger_full_scan()
+    orchestrator.check_for_updates = MagicMock(side_effect=RuntimeError("boom"))
+
+    orchestrator.step_process()
+
+    assert orchestrator.update_queue.get_nowait() == {
+        "event": "scan_complete",
+        "success": False,
+    }
+
+
 @patch("src.ui.orchestrator.time.sleep", return_value=None)
 def test_orchestrator_run_loop(mock_sleep, orchestrator):
     """Verify the run loop correctly consumes events and file swaps."""

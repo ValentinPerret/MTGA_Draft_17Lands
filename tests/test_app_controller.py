@@ -73,6 +73,43 @@ class TestAppController:
         mock_app.orchestrator.scanner.clear_draft.assert_called_with(True)
         mock_app.orchestrator.trigger_full_scan.assert_called_once()
 
+    def test_scan_complete_hides_overlay_and_resets_status(self, mock_app):
+        """A successful forced scan dismisses its blocking loading overlay."""
+        controller = AppController(mock_app)
+
+        import queue
+
+        mock_queue = queue.Queue()
+        mock_queue.put("REFRESH")
+        mock_queue.put({"event": "scan_complete", "success": True})
+        mock_app.orchestrator.update_queue = mock_queue
+        mock_app.root.after = MagicMock()
+
+        with patch.object(controller, "refresh_ui_data") as mock_refresh:
+            controller.update_loop()
+
+        mock_refresh.assert_called_once()
+        mock_app.loading_overlay.hide.assert_called_once()
+        mock_app.vars["status_text"].set.assert_called_with("Ready")
+
+    def test_unchanged_scan_still_hides_overlay(self, mock_app):
+        """Completion cannot depend on the scanner finding new draft state."""
+        controller = AppController(mock_app)
+
+        import queue
+
+        mock_queue = queue.Queue()
+        mock_queue.put({"event": "scan_complete", "success": True})
+        mock_app.orchestrator.update_queue = mock_queue
+        mock_app.root.after = MagicMock()
+
+        with patch.object(controller, "refresh_ui_data") as mock_refresh:
+            controller.update_loop()
+
+        mock_refresh.assert_not_called()
+        mock_app.loading_overlay.hide.assert_called_once()
+        mock_app.vars["status_text"].set.assert_called_with("Ready")
+
     @patch("src.ui.app_controller.AppUpdate")
     @patch("src.ui.app_controller.threading.Thread")
     def test_check_background_updates(self, mock_thread, mock_updater_cls, mock_app):

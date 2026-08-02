@@ -114,10 +114,15 @@ class AppController:
                 self.orchestrator.step_process()
 
             update_detected = False
+            scan_completed = False
+            scan_succeeded = True
             while True:
                 try:
                     msg = self.orchestrator.update_queue.get_nowait()
-                    if isinstance(msg, dict) and "status" in msg:
+                    if isinstance(msg, dict) and msg.get("event") == "scan_complete":
+                        scan_completed = True
+                        scan_succeeded = bool(msg.get("success", True))
+                    elif isinstance(msg, dict) and "status" in msg:
                         self.app.vars["status_text"].set(msg["status"])
                         if hasattr(self.app, "loading_overlay"):
                             self.app.loading_overlay.update_status(msg["status"])
@@ -139,6 +144,13 @@ class AppController:
                 self.refresh_ui_data()
                 if is_test:
                     self.root.update()
+
+            if scan_completed:
+                if hasattr(self.app, "loading_overlay"):
+                    self.app.loading_overlay.hide()
+                self.app.vars["status_text"].set(
+                    "Ready" if scan_succeeded else "Log scan failed"
+                )
 
             try:
                 ts = os.stat(self.orchestrator.scanner.arena_file).st_mtime

@@ -193,6 +193,7 @@ class DraftOrchestrator(threading.Thread):
 
     def step_process(self):
         if not self.loading and not self.monitoring_paused:
+            force = False
             try:
                 # Check our flag safely on the background thread
                 force = self._force_full_scan_event.is_set()
@@ -205,6 +206,19 @@ class DraftOrchestrator(threading.Thread):
                     self.update_queue.put("REFRESH")
             except Exception as e:
                 logger.error(f"Logic Step Error: {e}")
+                if force:
+                    self.update_queue.put(
+                        {"event": "scan_complete", "success": False}
+                    )
+            else:
+                # A forced scan must always tell the UI that it finished, even
+                # when the log contains no new draft state and no REFRESH event
+                # was necessary. Otherwise the blocking loading overlay remains
+                # visible forever.
+                if force:
+                    self.update_queue.put(
+                        {"event": "scan_complete", "success": True}
+                    )
 
     def check_for_updates(self, force=False):
         """
