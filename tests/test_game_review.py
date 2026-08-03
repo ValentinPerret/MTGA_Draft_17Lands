@@ -372,6 +372,21 @@ def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
                 "source": "codex",
             }
         ],
+        "decision_feedback": [
+            {
+                "decision_index": 1,
+                "turn": 99,
+                "phase": "Untrusted phase",
+                "observed_choice": "Untrusted paraphrase",
+                "assessment": "reasonable",
+                "confidence": 0.76,
+                "headline": "Made the available land drop",
+                "analysis": "Playing the Island developed mana for later turns.",
+                "better_line": "Keep the recorded line because no stronger sequencing is visible.",
+                "principle": "Develop mana before passing unless concealment has concrete value.",
+                "source": "codex",
+            }
+        ],
     }
     captured = {}
 
@@ -397,7 +412,11 @@ def test_codex_reviewer_uses_strict_local_runner_and_validates_result(tmp_path):
     assert "private-match-id" not in captured["prompt"]
     assert review.findings[0].source == "codex"
     assert review.deck_changes[0].add_card == "Sideboard Adept"
+    assert review.decision_feedback[0].turn == 1
+    assert review.decision_feedback[0].phase == "Main1"
+    assert review.decision_feedback[0].observed_choice == game.decisions[1].choice
 
     schema_path = Path(command[command.index("--output-schema") + 1])
     assert schema_path.name == "schema.json"
     assert "deck_changes" in captured["schema"]["required"]
+    assert "decision_feedback" in captured["schema"]["required"]

@@ -137,9 +137,16 @@ privacy, routing, testing, limitations, and troubleshooting details.
 Open the **Game Review** tab after a Limited game and click **Scan Player.log**.
 The app reconstructs the decisions Arena recorded, immediately runs conservative
 checks, and shows a chronological action timeline. Select a completed match and click
-**Analyze with Codex** for a deeper, manual review of observable combat, sequencing,
+**Analyze Game + Deck** for a deeper, manual review of observable combat, sequencing,
 mana, and interaction decisions. The review can take up to two minutes and runs in
 the background without freezing the interface.
+
+The **Decision Feedback** view explains pivotal choices from the opening hand through
+the late game. Each item shows the exact recorded choice, an assessment, confidence,
+why the line was good or questionable, a better line (or why the original line should
+be kept), and a reusable lesson. **Review All** processes every unreviewed completed
+game sequentially with explicit per-game progress; it never starts multiple Codex
+reviews at once.
 
 Arena also records the exact submitted main deck and sideboard. The **Deck Changes**
 view uses those lists to suggest concrete cuts and additions when construction or
@@ -171,7 +178,7 @@ The application is structured into a collapsible Live Dashboard and several func
 - **Datasets:** Manage, download, and update 17Lands card data locally. Provides detailed download summaries, including exactly how many MTGA cards were successfully matched with 17Lands telemetry data. Choose a **Time Period** (All Time, Latest Event, Last Week, etc.) to match 17Lands, and use **Clear Set History** to delete old downloaded datasets and re-sync a clean copy if loading slows down.
 - **Card Pool:** View the cards you have drafted. Features a **"Switch to Visual View"** button to stack your cards into mana curve columns exactly like MTG Arena does.
 - **Deck Builder:** A fully interactive deck construction environment combining Auto-Generation and manual Custom building. Features a 1-click **Auto-Lands** button, a sleek basics toolbar, and live deck size validation.
-- **Game Review:** Scan completed Limited games, inspect conservative findings and the recorded action timeline, review evidence-linked deck changes from the exact submitted deck and sideboard, request a deeper local Codex review, and monitor recurring improvement areas.
+- **Game Review:** Scan completed Limited games, inspect detailed pivotal-decision feedback and the recorded action timeline, review evidence-linked deck changes from the exact submitted deck and sideboard, batch-review unreviewed games with local Codex, and monitor recurring improvement areas.
 - **Comparisons:** Search and add multiple cards to directly compare their stats side-by-side.
 - **Tier Lists:** Import and manage custom tier lists from the 17Lands API.
 

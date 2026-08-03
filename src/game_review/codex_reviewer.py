@@ -56,7 +56,7 @@ def build_game_review_payload(
         if card.card_id:
             cards[card.card_id] = _card_payload(card)
     decisions = []
-    for decision in game.decisions[:120]:
+    for decision_index, decision in enumerate(game.decisions[:120]):
         snapshot = decision.snapshot
         all_cards = (
             snapshot.hand
@@ -69,6 +69,7 @@ def build_game_review_payload(
                 cards[card.card_id] = _card_payload(card)
         decisions.append(
             {
+                "decision_index": decision_index,
                 "turn": snapshot.turn,
                 "phase": snapshot.phase,
                 "step": snapshot.step,
@@ -191,7 +192,13 @@ class CodexGameReviewer:
             "Prefer no deck_changes after one game unless the construction evidence is strong. "
             "Every cut must be in submitted_deck; every addition must be in sideboard or be a "
             "named basic land available in Limited. Cite how many games support the change and "
-            "state the expected tradeoff. Set source=codex for every finding and deck change. Return only "
+            "state the expected tradeoff. Provide detailed decision_feedback for the pivotal "
+            "observable decisions across the opening, early, middle, and late game when those "
+            "stages exist. Include good decisions as well as mistakes; use 5 to 12 moments for "
+            "a full game when the log supports them, avoid filler, and reference the exact "
+            "decision_index from MATCH_STATE_JSON. For a strong or reasonable choice, better_line "
+            "must explain why keeping the recorded line is preferable. Set source=codex for every "
+            "finding, deck change, and decision feedback item. Return only "
             "the required structured object.\n\n"
             "MATCH_STATE_JSON:\n"
             + json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -282,7 +289,28 @@ class CodexGameReviewer:
             if cut == addition:
                 raise CodexGameReviewError("Codex recommended swapping a card for itself")
             if change.evidence_games > 1 + len(prior_games):
-                raise CodexGameReviewError("Codex cited more games than the same-deck history contains")
+                raise CodexGameReviewError(
+                    "Codex cited more games than the same-deck history contains"
+                )
+        normalized_feedback = []
+        seen_decisions = set()
+        for feedback in review.decision_feedback:
+            if feedback.decision_index >= min(120, len(game.decisions)):
+                raise CodexGameReviewError("Codex cited a decision absent from the recorded game")
+            if feedback.decision_index in seen_decisions:
+                raise CodexGameReviewError("Codex returned duplicate feedback for one decision")
+            seen_decisions.add(feedback.decision_index)
+            decision = game.decisions[feedback.decision_index]
+            normalized_feedback.append(
+                feedback.model_copy(
+                    update={
+                        "turn": decision.snapshot.turn,
+                        "phase": decision.snapshot.phase,
+                        "observed_choice": decision.choice or decision.kind.title(),
+                        "source": "codex",
+                    }
+                )
+            )
         return review.model_copy(
             update={
                 "findings": [
@@ -293,6 +321,7 @@ class CodexGameReviewer:
                     change.model_copy(update={"source": "codex"})
                     for change in review.deck_changes
                 ],
+                "decision_feedback": normalized_feedback,
             }
         )
 

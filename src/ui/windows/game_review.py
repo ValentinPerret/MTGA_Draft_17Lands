@@ -56,6 +56,7 @@ class GameReviewPanel(ttk.Frame):
         self._review_running = False
         self._review_wrap_labels = []
         self._deck_wrap_labels = []
+        self._feedback_wrap_labels = []
         self._build_ui()
         self._poll_id = self.after(100, self._poll_results)
         self._render_progress()
@@ -96,6 +97,14 @@ class GameReviewPanel(ttk.Frame):
             state="disabled",
         )
         self.btn_codex.pack(side="right", padx=Theme.scaled_val(5))
+        self.btn_review_all = ttk.Button(
+            header,
+            text="Review All",
+            bootstyle="success-outline",
+            command=self._analyze_all,
+            state="disabled",
+        )
+        self.btn_review_all.pack(side="right", padx=Theme.scaled_val(5))
         self.btn_scan = ttk.Button(
             header,
             text="Scan Player.log",
@@ -159,19 +168,23 @@ class GameReviewPanel(ttk.Frame):
         self.detail_notebook.pack(fill="both", expand=True)
 
         self.review_tab = ttk.Frame(self.detail_notebook)
+        self.feedback_tab = ttk.Frame(self.detail_notebook)
         self.timeline_tab = ttk.Frame(self.detail_notebook, padding=Theme.scaled_val(8))
         self.deck_tab = ttk.Frame(self.detail_notebook)
         self.progress_tab = ttk.Frame(self.detail_notebook, padding=Theme.scaled_val(12))
         self.detail_notebook.add(self.review_tab, text=" Review ")
+        self.detail_notebook.add(self.feedback_tab, text=" Decision Feedback ")
         self.detail_notebook.add(self.timeline_tab, text=" Timeline ")
         self.detail_notebook.add(self.deck_tab, text=" Deck Changes ")
         self.detail_notebook.add(self.progress_tab, text=" Progress ")
 
         self._build_review_canvas()
+        self._build_feedback_canvas()
         self._build_timeline()
         self._build_deck_changes()
         self._build_progress()
         self._render_deck_changes(None, None, None, False)
+        self._render_decision_feedback(None, False)
 
     def _build_review_canvas(self):
         self.review_tab.rowconfigure(0, weight=1)
@@ -206,6 +219,43 @@ class GameReviewPanel(ttk.Frame):
         self.review_canvas.itemconfigure(self.review_window, width=event.width)
         wrap = max(280, event.width - Theme.scaled_val(70))
         for label in self._review_wrap_labels:
+            if label.winfo_exists():
+                label.configure(wraplength=wrap)
+
+    def _build_feedback_canvas(self):
+        self.feedback_tab.rowconfigure(0, weight=1)
+        self.feedback_tab.columnconfigure(0, weight=1)
+        self.feedback_canvas = tkinter.Canvas(
+            self.feedback_tab, highlightthickness=0, bg=Theme.BG_PRIMARY
+        )
+        feedback_scroll = AutoScrollbar(
+            self.feedback_tab,
+            orient="vertical",
+            command=self.feedback_canvas.yview,
+        )
+        self.feedback_canvas.configure(yscrollcommand=feedback_scroll.set)
+        self.feedback_canvas.grid(row=0, column=0, sticky="nsew")
+        feedback_scroll.grid(row=0, column=1, sticky="ns")
+        self.feedback_content = ttk.Frame(
+            self.feedback_canvas, padding=Theme.scaled_val(14)
+        )
+        self.feedback_window = self.feedback_canvas.create_window(
+            (0, 0), window=self.feedback_content, anchor="nw"
+        )
+        self.feedback_content.bind(
+            "<Configure>",
+            lambda event: self.feedback_canvas.configure(
+                scrollregion=self.feedback_canvas.bbox("all")
+            ),
+        )
+        self.feedback_canvas.bind("<Configure>", self._resize_feedback_canvas)
+        bind_scroll(self.feedback_canvas, self.feedback_canvas.yview_scroll)
+        bind_scroll(self.feedback_content, self.feedback_canvas.yview_scroll)
+
+    def _resize_feedback_canvas(self, event):
+        self.feedback_canvas.itemconfigure(self.feedback_window, width=event.width)
+        wrap = max(280, event.width - Theme.scaled_val(70))
+        for label in self._feedback_wrap_labels:
             if label.winfo_exists():
                 label.configure(wraplength=wrap)
 
@@ -342,6 +392,7 @@ class GameReviewPanel(ttk.Frame):
         self._task_token += 1
         token = self._task_token
         self.btn_scan.configure(state="disabled", text="Scanning…")
+        self._update_action_buttons()
         self.lbl_status.configure(
             text=f"Reading {signature[1] / 1_048_576:.1f} MB of detailed gameplay events…",
             bootstyle="info",
@@ -396,6 +447,10 @@ class GameReviewPanel(ttk.Frame):
                     self._apply_scan(value, error)
                 elif kind == "review":
                     self._apply_codex_review(value, error)
+                elif kind == "batch_progress":
+                    self._apply_batch_progress(value)
+                elif kind == "batch_done":
+                    self._apply_batch_done(value)
         except queue.Empty:
             pass
         if self.winfo_exists():
@@ -407,6 +462,7 @@ class GameReviewPanel(ttk.Frame):
         if error:
             self._last_log_signature = None
             self.lbl_status.configure(text=f"Scan failed: {error}", bootstyle="danger")
+            self._update_action_buttons()
             return
 
         self.games = {match_key(game.match_id, game.game_number): game for game in games}
@@ -459,6 +515,7 @@ class GameReviewPanel(ttk.Frame):
             self.match_tree.selection_set(preferred)
             self.match_tree.focus(preferred)
             self._select_key(preferred)
+        self._update_action_buttons()
 
     def _insert_match_row(self, key, played_at, event_id, result, coverage):
         try:
@@ -491,17 +548,44 @@ class GameReviewPanel(ttk.Frame):
         )
         from_codex = bool(stored and stored.codex_review)
         self._render_review(review, game, from_codex)
+        self._render_decision_feedback(review, from_codex)
         self._render_timeline(game)
         self._render_deck_changes(review, game, stored, from_codex)
-        can_review = bool(
-            game
-            and game.completed
-            and game.coverage != "summary"
-            and self.configuration.model_assistance.enabled
+        self._update_action_buttons()
+
+    def _codex_enabled(self) -> bool:
+        return bool(
+            self.configuration.model_assistance.enabled
             and self.configuration.model_assistance.allow_manual_analysis
-            and not self._review_running
         )
+
+    def _unreviewed_games(self):
+        reviewed_keys = {
+            stored.match_key
+            for stored in self.store.load().games
+            if stored.codex_review
+        }
+        return [
+            (key, game)
+            for key, game in self.games.items()
+            if game.completed
+            and game.coverage != "summary"
+            and key not in reviewed_keys
+        ]
+
+    def _update_action_buttons(self):
+        game = self.games.get(self._selected_key)
+        available = self._codex_enabled() and not (
+            self._scan_running or self._review_running
+        )
+        can_review = bool(
+            available and game and game.completed and game.coverage != "summary"
+        )
+        can_review_all = bool(available and self._unreviewed_games())
         self.btn_codex.configure(state="normal" if can_review else "disabled")
+        self.btn_review_all.configure(
+            state="normal" if can_review_all else "disabled"
+        )
 
     def _render_empty_review(self):
         self._clear_review()
@@ -631,6 +715,119 @@ class GameReviewPanel(ttk.Frame):
                 iid=str(index),
                 values=(action.turn or "—", action.phase, action_text, action.detail),
             )
+
+    def _render_decision_feedback(self, review, from_codex: bool):
+        for widget in self.feedback_content.winfo_children():
+            widget.destroy()
+        self._feedback_wrap_labels = []
+
+        ttk.Label(
+            self.feedback_content,
+            text="DECISION FEEDBACK",
+            font=Theme.scaled_font(14, "bold"),
+            bootstyle="primary",
+        ).pack(anchor="w")
+        source_text = (
+            "Detailed local Codex review of pivotal recorded choices"
+            if from_codex
+            else "Conservative preview from directly observable log evidence"
+        )
+        ttk.Label(
+            self.feedback_content,
+            text=source_text,
+            font=Theme.scaled_font(9, "bold"),
+            bootstyle="secondary",
+        ).pack(anchor="w", pady=(2, 12))
+
+        feedback_items = list(review.decision_feedback) if review else []
+        if not feedback_items:
+            label = ttk.Label(
+                self.feedback_content,
+                text=(
+                    "No decision-specific evaluation is available yet. Select a completed game "
+                    "and use Analyze Game + Deck, or use Review All for every unreviewed game."
+                ),
+                font=Theme.scaled_font(11),
+                justify="left",
+                wraplength=Theme.scaled_val(680),
+                bootstyle="info",
+            )
+            label.pack(anchor="w", fill="x", pady=(8, 16))
+            self._feedback_wrap_labels.append(label)
+            return
+
+        assessment_styles = {
+            "strong": "success",
+            "reasonable": "info",
+            "close": "warning",
+            "questionable": "warning",
+            "mistake": "danger",
+            "uncertain": "secondary",
+        }
+        for order, item in enumerate(
+            sorted(feedback_items, key=lambda value: value.decision_index), start=1
+        ):
+            frame = ttk.Labelframe(
+                self.feedback_content,
+                text=f" MOMENT {order} • TURN {item.turn} ",
+                padding=Theme.scaled_val(11),
+            )
+            frame.pack(fill="x", pady=Theme.scaled_val((0, 12)))
+            ttk.Label(
+                frame,
+                text=(
+                    f"{item.assessment.upper()} • {item.phase or 'Unknown phase'} • "
+                    f"{item.confidence:.0%} CONFIDENCE"
+                ),
+                font=Theme.scaled_font(8, "bold"),
+                bootstyle=assessment_styles[item.assessment],
+            ).pack(anchor="w", pady=(0, 6))
+            headline = ttk.Label(
+                frame,
+                text=item.headline,
+                font=Theme.scaled_font(11, "bold"),
+                justify="left",
+                wraplength=Theme.scaled_val(650),
+            )
+            headline.pack(anchor="w", fill="x", pady=(0, 6))
+            self._feedback_wrap_labels.append(headline)
+            choice = ttk.Label(
+                frame,
+                text=f"Recorded choice: {item.observed_choice}",
+                font=Theme.scaled_font(10, "bold"),
+                justify="left",
+                wraplength=Theme.scaled_val(650),
+            )
+            choice.pack(anchor="w", fill="x", pady=(0, 6))
+            self._feedback_wrap_labels.append(choice)
+            for title, text in (
+                ("Assessment", item.analysis),
+                ("Better line / why keep", item.better_line),
+                ("Reusable lesson", item.principle),
+            ):
+                label = ttk.Label(
+                    frame,
+                    text=f"{title}: {text}",
+                    justify="left",
+                    wraplength=Theme.scaled_val(650),
+                )
+                label.pack(anchor="w", fill="x", pady=2)
+                self._feedback_wrap_labels.append(label)
+
+        if not from_codex:
+            note = ttk.Label(
+                self.feedback_content,
+                text=(
+                    "This preview only marks conclusions supported by simple log checks. "
+                    "Analyze Game + Deck adds pivotal combat, sequencing, target, timing, "
+                    "and resource-use feedback while preserving uncertainty."
+                ),
+                justify="left",
+                wraplength=Theme.scaled_val(680),
+                bootstyle="secondary",
+            )
+            note.pack(anchor="w", fill="x", pady=(2, 10))
+            self._feedback_wrap_labels.append(note)
 
     def _render_deck_changes(self, review, game, stored, from_codex: bool):
         for widget in self.deck_content.winfo_children():
@@ -789,6 +986,7 @@ class GameReviewPanel(ttk.Frame):
         self._task_token += 1
         token = self._task_token
         self.btn_codex.configure(state="disabled", text="Analyzing Game + Deck…")
+        self.btn_review_all.configure(state="disabled")
         self.btn_scan.configure(state="disabled")
         self.lbl_status.configure(
             text=(
@@ -820,6 +1018,141 @@ class GameReviewPanel(ttk.Frame):
 
         threading.Thread(target=worker, name="codex-game-review", daemon=True).start()
 
+    def _analyze_all(self):
+        if self._review_running or self._scan_running or not self._codex_enabled():
+            return
+        targets = self._unreviewed_games()
+        if not targets:
+            self.lbl_status.configure(
+                text="Every completed game in the current log already has a detailed review.",
+                bootstyle="success",
+            )
+            self._update_action_buttons()
+            return
+
+        self._review_running = True
+        self._task_token += 1
+        token = self._task_token
+        total = len(targets)
+        self.btn_scan.configure(state="disabled")
+        self.btn_codex.configure(state="disabled")
+        self.btn_review_all.configure(state="disabled", text=f"Reviewing 1/{total}…")
+        self.lbl_status.configure(
+            text=(
+                f"Reviewing {total} completed game(s) sequentially. Each game can take up to "
+                "two minutes; detailed progress will appear here and the app remains responsive…"
+            ),
+            bootstyle="info",
+        )
+
+        def worker():
+            completed = 0
+            failed = 0
+            for index, (key, game) in enumerate(targets, start=1):
+                try:
+                    review = self.reviewer.review(
+                        game,
+                        timeout_seconds=max(
+                            120.0,
+                            float(
+                                self.configuration.model_assistance.request_timeout_seconds
+                            ),
+                        ),
+                        model=self.configuration.model_assistance.model,
+                        prior_games=self.store.same_deck_games(
+                            game.deck_fingerprint, exclude_key=key
+                        ),
+                    )
+                    if not self.store.save_codex_review(key, review):
+                        raise CodexGameReviewError(
+                            "the scanned game was not present in local review history"
+                        )
+                    completed += 1
+                    item_error = ""
+                except CodexGameReviewError as error:
+                    failed += 1
+                    item_error = str(error)
+                except Exception as error:
+                    failed += 1
+                    item_error = f"unexpected error: {error}"
+                self._results.put(
+                    (
+                        "batch_progress",
+                        token,
+                        {
+                            "index": index,
+                            "total": total,
+                            "key": key,
+                            "error": item_error,
+                        },
+                        "",
+                    )
+                )
+            self._results.put(
+                (
+                    "batch_done",
+                    token,
+                    {"completed": completed, "failed": failed, "total": total},
+                    "",
+                )
+            )
+
+        threading.Thread(
+            target=worker, name="codex-game-review-batch", daemon=True
+        ).start()
+
+    def _apply_batch_progress(self, progress):
+        index = progress["index"]
+        total = progress["total"]
+        self.btn_review_all.configure(
+            text=f"Reviewing {min(index + 1, total)}/{total}…"
+        )
+        if progress["error"]:
+            self.lbl_status.configure(
+                text=(
+                    f"Game {index}/{total} could not be reviewed: {progress['error']}. "
+                    "Continuing with the next game…"
+                ),
+                bootstyle="warning",
+            )
+        else:
+            self.lbl_status.configure(
+                text=(
+                    f"Game {index}/{total} complete with detailed decision feedback"
+                    + ("; starting the next game…" if index < total else ".")
+                ),
+                bootstyle="info" if index < total else "success",
+            )
+        if self._selected_key == progress["key"]:
+            self._select_key(self._selected_key)
+        self._render_progress()
+
+    def _apply_batch_done(self, result):
+        self._review_running = False
+        self.btn_scan.configure(state="normal")
+        self.btn_codex.configure(text="Analyze Game + Deck")
+        self.btn_review_all.configure(text="Review All")
+        if result["failed"]:
+            self.lbl_status.configure(
+                text=(
+                    f"Detailed review finished: {result['completed']} succeeded and "
+                    f"{result['failed']} failed. Failed games remain available for retry."
+                ),
+                bootstyle="warning",
+            )
+        else:
+            self.lbl_status.configure(
+                text=(
+                    f"Detailed feedback is complete for all {result['completed']} "
+                    "previously unreviewed game(s)."
+                ),
+                bootstyle="success",
+            )
+        if self._selected_key:
+            self._select_key(self._selected_key)
+        self._render_progress()
+        self._update_action_buttons()
+
     def _apply_codex_review(self, result, error: str):
         review_key, review = result
         self._review_running = False
@@ -830,6 +1163,7 @@ class GameReviewPanel(ttk.Frame):
                 text=f"Codex analysis unavailable: {error}", bootstyle="warning"
             )
             self._select_key(self._selected_key)
+            self._update_action_buttons()
             return
         self.store.save_codex_review(review_key, review)
         self.lbl_status.configure(
@@ -838,3 +1172,4 @@ class GameReviewPanel(ttk.Frame):
         )
         self._select_key(self._selected_key)
         self._render_progress()
+        self._update_action_buttons()

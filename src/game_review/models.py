@@ -125,6 +125,29 @@ class DeckChange(BaseModel):
     source: Literal["log", "codex"]
 
 
+class DecisionFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_index: int = Field(ge=0, le=119)
+    turn: int = Field(ge=0)
+    phase: str = Field(max_length=80)
+    observed_choice: str = Field(max_length=320)
+    assessment: Literal[
+        "strong",
+        "reasonable",
+        "close",
+        "questionable",
+        "mistake",
+        "uncertain",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    headline: str = Field(min_length=1, max_length=120)
+    analysis: str = Field(min_length=1, max_length=600)
+    better_line: str = Field(min_length=1, max_length=420)
+    principle: str = Field(min_length=1, max_length=320)
+    source: Literal["log", "codex"]
+
+
 class GameIndicators(BaseModel):
     """Small, privacy-safe signals retained for same-deck trend analysis."""
 
@@ -147,6 +170,7 @@ class MatchReview(BaseModel):
     focus_areas: List[str] = Field(default_factory=list, max_length=5)
     findings: List[ReviewFinding] = Field(default_factory=list, max_length=10)
     deck_changes: List[DeckChange] = Field(default_factory=list, max_length=5)
+    decision_feedback: List[DecisionFeedback] = Field(default_factory=list, max_length=12)
 
 
 class CodexGameReview(BaseModel):
@@ -158,9 +182,10 @@ class CodexGameReview(BaseModel):
     strengths: List[str] = Field(max_length=5)
     focus_areas: List[str] = Field(max_length=5)
     findings: List[ReviewFinding] = Field(max_length=8)
-    # Default preserves locally stored reviews created before deck coaching existed.
+    # Defaults preserve locally stored reviews created before coaching fields existed.
     # The emitted Codex JSON schema still marks this field as required.
     deck_changes: List[DeckChange] = Field(default_factory=list, max_length=5)
+    decision_feedback: List[DecisionFeedback] = Field(default_factory=list, max_length=12)
 
 
 class StoredGameReview(BaseModel):

@@ -6,7 +6,13 @@ from collections import defaultdict
 from typing import Iterable
 
 from src.game_review.deck_advisor import recommend_deck_changes
-from src.game_review.models import GameIndicators, MatchReview, ParsedGame, ReviewFinding
+from src.game_review.models import (
+    DecisionFeedback,
+    GameIndicators,
+    MatchReview,
+    ParsedGame,
+    ReviewFinding,
+)
 
 
 def _is_land(card) -> bool:
@@ -133,6 +139,79 @@ def _timeout_finding(game: ParsedGame):
     )
 
 
+def _deterministic_decision_feedback(
+    game: ParsedGame,
+    findings: list[ReviewFinding],
+) -> list[DecisionFeedback]:
+    feedback = []
+    for finding in findings:
+        matching = next(
+            (
+                (index, decision)
+                for index, decision in enumerate(game.decisions[:120])
+                if decision.snapshot.turn == finding.turn
+                and (finding.turn > 0 or decision.kind == "mulligan")
+            ),
+            None,
+        )
+        if matching is None and game.decisions:
+            fallback_index = min(len(game.decisions), 120) - 1
+            matching = (fallback_index, game.decisions[fallback_index])
+        if matching is None:
+            continue
+        index, decision = matching
+        feedback.append(
+            DecisionFeedback(
+                decision_index=index,
+                turn=decision.snapshot.turn,
+                phase=decision.snapshot.phase,
+                observed_choice=decision.choice or decision.kind.title(),
+                assessment=(
+                    "mistake"
+                    if finding.severity == "high" and finding.certainty != "possible"
+                    else "questionable"
+                ),
+                confidence=finding.confidence,
+                headline=finding.title,
+                analysis=finding.evidence,
+                better_line=finding.better_line,
+                principle=finding.practice_tip,
+                source="log",
+            )
+        )
+
+    if not feedback:
+        keep = next(
+            (
+                (index, decision)
+                for index, decision in enumerate(game.decisions[:120])
+                if decision.kind == "mulligan" and "AcceptHand" in decision.choice
+            ),
+            None,
+        )
+        if keep:
+            index, decision = keep
+            feedback.append(
+                DecisionFeedback(
+                    decision_index=index,
+                    turn=decision.snapshot.turn,
+                    phase=decision.snapshot.phase,
+                    observed_choice=decision.choice,
+                    assessment="reasonable",
+                    confidence=0.62,
+                    headline="Opening-hand choice was not clearly problematic",
+                    analysis=(
+                        "The conservative checks found no obvious land-count problem in the kept hand. "
+                        "Card interactions and matchup context may still change the decision."
+                    ),
+                    better_line="No clearly superior alternative is supported by the recorded opening hand alone.",
+                    principle="Evaluate mana, early plays, and colored sources before considering raw card quality.",
+                    source="log",
+                )
+            )
+    return feedback[:12]
+
+
 def analyze_game(
     game: ParsedGame,
     prior_indicators: Iterable[GameIndicators] = (),
@@ -176,4 +255,5 @@ def analyze_game(
         focus_areas=focus_areas[:5],
         findings=findings[:10],
         deck_changes=recommend_deck_changes(game, prior_indicators),
+        decision_feedback=_deterministic_decision_feedback(game, findings),
     )

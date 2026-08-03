@@ -9,13 +9,17 @@ post-match coaching workflow for Limited games.
 2. Finish a Premier Draft, Quick Draft, Traditional Draft, Sealed, or Cube game.
 3. Open **Game Review** and click **Scan Player.log**.
 4. Select a completed game to inspect the conservative review and action timeline.
-5. Open **Deck Changes** to see whether the submitted list should change.
-6. Optionally click **Analyze Game + Deck** for a deeper local review.
-7. Use **Progress** to track recurring categories and the finding rate across reviewed
+5. Open **Decision Feedback** for choice-by-choice explanations and reusable lessons.
+6. Open **Deck Changes** to see whether the submitted list should change.
+7. Optionally click **Analyze Game + Deck** for one deeper local review, or **Review
+   All** to process every unreviewed completed game sequentially.
+8. Use **Progress** to track recurring categories and the finding rate across reviewed
    games.
 
 Scanning and Codex analysis both run on background threads. The status line explains
-the active operation; a Codex review can take up to two minutes.
+the active operation; a Codex review can take up to two minutes per game. Review All
+shows the current game number, saves successful reviews as they finish, continues
+after an individual failure, and leaves failed games available for retry.
 
 ## Evidence model
 
@@ -31,6 +35,25 @@ Codex review compares the recorded legal choices and board snapshots for sequenc
 combat, interaction, and resource-use opportunities. Every finding includes a cited
 turn, evidence, an alternative line, a reusable practice tip, certainty, and
 confidence.
+
+### Detailed decision feedback
+
+The local Codex pass selects pivotal decisions across the opening, early, middle, and
+late game when those stages are present. Feedback includes strong and reasonable
+choices as well as close decisions, questionable lines, mistakes, and genuinely
+uncertain states. Each moment contains:
+
+- the exact recorded turn, phase, and chosen action;
+- an assessment and confidence level;
+- an explanation grounded in the visible hand, battlefield, life totals, and legal
+  options;
+- a better line, or an explanation of why keeping the recorded line was preferable;
+- one principle that can be reused in future games.
+
+Codex references a bounded decision index. Before persistence, the app validates that
+the index exists, rejects duplicate citations, and replaces the returned turn, phase,
+and choice text with the authoritative values from the parsed log. This prevents a
+model paraphrase from being presented as recorded evidence.
 
 ### Deck-change evidence
 
@@ -76,6 +99,9 @@ legal action in the log does not by itself mean that action was strategically be
   available.
 - The coaching is advisory. It cannot guarantee an optimal line and never clicks or
   controls Arena.
+- Decision Feedback emphasizes pivotal choices rather than inventing commentary for
+  every priority pass. A full detailed review normally contains five to twelve useful
+  moments when the log supports them.
 - Deck changes can expose correlations, not prove causation. Synergy, matchup, and
   small-sample effects may still make a suggested swap wrong; certainty and evidence
   counts are displayed for that reason.
