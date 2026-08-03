@@ -12,12 +12,14 @@ a = Analysis(
         "importlib_metadata",
         "zipp",
         "PIL._tkinter_finder",
-        "PIL._imagingtk_finder",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # The simulator uses serial ``njit`` only. Excluding Numba's optional
+    # OpenMP pool avoids packaging an extension whose libomp dependency is not
+    # present on a standard macOS install.
+    excludes=["numba.np.ufunc.omppool"],
     noarchive=False,
     optimize=0,
 )

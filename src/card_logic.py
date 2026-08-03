@@ -257,6 +257,23 @@ def field_process_sort(field_value):
             if val in ["NA", "-", ""]:
                 return (0, 0.0)
 
+            # Compact overlay cells use ``archetype (overall)``. Sort cards
+            # with archetype data first, then use the overall rate to order
+            # cards whose archetype rate is unavailable.
+            paired_rate = re.fullmatch(
+                r"(-|[-+]?\d+(?:\.\d+)?)\s*\((-|[-+]?\d+(?:\.\d+)?)\)",
+                val,
+            )
+            if paired_rate:
+                archetype_rate, overall_rate = paired_rate.groups()
+                if archetype_rate != "-":
+                    return (1, float(archetype_rate))
+                return (
+                    (0, float(overall_rate))
+                    if overall_rate != "-"
+                    else (0, 0.0)
+                )
+
             for k, v in constants.GRADE_ORDER_DICT.items():
                 if k.strip() == val:
                     return (1, float(v))

@@ -340,7 +340,16 @@ class TakenCardsPanel(ttk.Frame):
             if region not in ("tree", "cell"):
                 return
 
-        sel = self.table.selection()
+        clicked_row = (
+            self.table.identify_row(event.y)
+            if hasattr(event, "y") and hasattr(self.table, "identify_row")
+            else ""
+        )
+        if clicked_row:
+            self.table.selection_set(clicked_row)
+            sel = [clicked_row]
+        else:
+            sel = self.table.selection()
         if not sel:
             return
 

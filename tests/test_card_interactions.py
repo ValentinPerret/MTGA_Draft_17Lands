@@ -1,5 +1,6 @@
 import pytest
 import tkinter
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from src.ui.card_interactions import CardInteractionManager
 from src.constants import DATA_FIELD_NAME
@@ -23,6 +24,7 @@ class TestCardInteractions:
 
         mock_table = MagicMock()
         mock_table.identify_region.return_value = "cell"
+        mock_table.identify_row.return_value = "item1"
         mock_table.selection.return_value = ["item1"]
         mock_table.item.return_value = {"text": "Lightning Bolt"}
 
@@ -35,6 +37,7 @@ class TestCardInteractions:
 
         # Tooltip should trigger with the right card data
         mock_tooltip.assert_called_once()
+        mock_table.selection_set.assert_called_once_with("item1")
         assert mock_tooltip.call_args[0][1][DATA_FIELD_NAME] == "Lightning Bolt"
 
     @patch("src.ui.card_interactions.CardToolTip.create")
@@ -43,12 +46,14 @@ class TestCardInteractions:
 
         mock_table = MagicMock()
         mock_table.identify_region.return_value = "cell"
+        mock_table.identify_row.return_value = "item1"
         mock_table.selection.return_value = ["item1"]
         mock_table.item.return_value = {"text": "Giant Growth"}
 
         manager.on_card_select(MagicMock(x=10, y=10), mock_table, "missing")
 
         mock_tooltip.assert_called_once()
+        mock_table.selection_set.assert_called_once_with("item1")
         assert mock_tooltip.call_args[0][1][DATA_FIELD_NAME] == "Giant Growth"
 
     def test_context_menu_spawns(self, mock_app):
@@ -73,3 +78,55 @@ class TestCardInteractions:
         mock_open_file.assert_called_once_with(
             "https://scryfall.com/search?q=Light%20up%20the%20Stage"
         )
+
+    @patch("src.ui.card_interactions.CardToolTip.create")
+    def test_delayed_hover_previews_card_without_pinning(
+        self, mock_tooltip, mock_app
+    ):
+        manager = CardInteractionManager(mock_app)
+        manager.HOVER_DELAY_MS = 1
+        callbacks = {}
+        table = MagicMock()
+        table._card_hover_bound = False
+        table.bind.side_effect = lambda sequence, callback, add=None: callbacks.update(
+            {sequence: callback}
+        )
+        table.after.side_effect = mock_app.root.after
+        table.after_cancel.side_effect = mock_app.root.after_cancel
+        table.identify_region.return_value = "cell"
+        table.identify_row.return_value = "row-1"
+        table.winfo_exists.return_value = True
+        table.item.return_value = {"text": "Lightning Bolt"}
+
+        manager.bind_hover_preview(table, lambda: mock_app.current_pack_data)
+        callbacks["<Motion>"](SimpleNamespace(x=2, y=10))
+        mock_app.root.after(10, mock_app.root.quit)
+        mock_app.root.mainloop()
+
+        mock_tooltip.assert_called_once()
+        assert mock_tooltip.call_args.kwargs["persistent"] is False
+
+    @patch("src.ui.card_interactions.CardToolTip.create")
+    def test_leaving_table_cancels_delayed_hover(self, mock_tooltip, mock_app):
+        manager = CardInteractionManager(mock_app)
+        manager.HOVER_DELAY_MS = 5
+        callbacks = {}
+        table = MagicMock()
+        table._card_hover_bound = False
+        table.bind.side_effect = lambda sequence, callback, add=None: callbacks.update(
+            {sequence: callback}
+        )
+        table.after.side_effect = mock_app.root.after
+        table.after_cancel.side_effect = mock_app.root.after_cancel
+        table.identify_region.return_value = "cell"
+        table.identify_row.return_value = "row-1"
+        table.winfo_exists.return_value = True
+        table.item.return_value = {"text": "Lightning Bolt"}
+
+        manager.bind_hover_preview(table, lambda: mock_app.current_pack_data)
+        callbacks["<Motion>"](SimpleNamespace(x=2, y=10))
+        callbacks["<Leave>"]()
+        mock_app.root.after(15, mock_app.root.quit)
+        mock_app.root.mainloop()
+
+        mock_tooltip.assert_not_called()

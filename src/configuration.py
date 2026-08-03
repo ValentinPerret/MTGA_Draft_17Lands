@@ -96,6 +96,7 @@ class Settings(BaseModel):
     missing_notifications_enabled: bool = True
     auto_sync_datasets: bool = True
     show_splash_screen: bool = True
+    advisor_engine: str = "contextual_v2"
 
     # System Paths (Restored)
     arena_log_location: str = ""
@@ -134,6 +135,13 @@ class Settings(BaseModel):
     def validate_ui_size(cls, value, info):
         allowed_values = constants.UI_SIZE_DICT
         if value not in allowed_values:
+            return cls.model_fields[info.field_name].default
+        return value
+
+    @field_validator("advisor_engine")
+    @classmethod
+    def validate_advisor_engine(cls, value, info):
+        if value not in {"legacy", "contextual_v2"}:
             return cls.model_fields[info.field_name].default
         return value
 
@@ -183,6 +191,31 @@ class CardData(BaseModel):
     last_auto_check: float = 0
 
 
+class ModelAssistance(BaseModel):
+    """Optional second-pass reviewer configuration.
+
+    The deterministic advisor never depends on this feature. The ``codex``
+    provider delegates to an already-authenticated local Codex installation; a
+    blank model lets Codex select its current recommended default.
+    """
+
+    enabled: bool = True
+    provider: str = "codex"
+    model: str = ""
+    automatic_call_limit_per_draft: int = Field(default=10, ge=0, le=50)
+    close_score_margin: float = Field(default=4.0, ge=0.0)
+    skip_score_margin: float = Field(default=8.0, ge=0.0)
+    skip_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    minimum_remaining_pick_seconds: int = Field(default=20, ge=0)
+    request_timeout_seconds: float = Field(default=12.0, gt=0.0, le=30.0)
+    allow_manual_analysis: bool = True
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value):
+        return "codex" if str(value).strip().lower() == "codex" else "codex"
+
+
 class Configuration(BaseModel):
     """This class groups together the data stored in the config.json file"""
 
@@ -190,6 +223,9 @@ class Configuration(BaseModel):
     card_logic: CardLogic = Field(default_factory=lambda: CardLogic())
     features: Features = Field(default_factory=lambda: Features())
     card_data: CardData = Field(default_factory=lambda: CardData())
+    model_assistance: ModelAssistance = Field(
+        default_factory=lambda: ModelAssistance()
+    )
 
 
 def read_configuration(file_location: str = CONFIG_FILE) -> Tuple[Configuration, bool]:

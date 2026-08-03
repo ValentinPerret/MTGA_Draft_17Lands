@@ -17,3 +17,7 @@ def test_recommendation_schema():
     assert rec.is_elite is False
     assert rec.archetype_fit == "Neutral"
     assert rec.tags == []
+    assert rec.engine == "legacy"
+    assert rec.confidence == 0.0
+    assert rec.lane_probabilities == {}
+    assert rec.data_caveats == []

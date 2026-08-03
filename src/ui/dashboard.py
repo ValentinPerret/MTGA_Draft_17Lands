@@ -94,51 +94,47 @@ class DashboardFrame(ttk.Frame):
                         lbl.configure(wraplength=wrap_len)
 
     def _build_customization_tips(self, parent):
-        """Helper to build a unified tips section for both waiting screens."""
-        tips_frame = ttk.Frame(parent)
+        """Build a compact, surface-based setup guide for idle states."""
+        tips_frame = ttk.Frame(
+            parent, style="Surface.TFrame", padding=Theme.scaled_val(16)
+        )
 
         ttk.Label(
             tips_frame,
-            text="✨ Personalize Your Experience",
-            font=Theme.scaled_font(11, "bold"),
-            bootstyle="primary",
+            text="Helpful setup",
+            style="SurfaceTitle.TLabel",
         ).pack(anchor="w", pady=(0, Theme.scaled_val(8)))
 
         tips = [
             (
-                "🎨 Themes & Mana Flairs:",
-                "Use the 'Theme' menu at the very top of the window to select Magic-inspired color palettes.",
+                "Appearance",
+                "Use the Theme menu to choose a palette and File > Preferences to adjust scale.",
             ),
             (
-                "📊 Custom Columns:",
-                "Right-click any table header (like 'GIH WR' or 'NAME') to re-arrange, add, or remove stats. You can even display your downloaded Tier Lists!",
+                "Table columns",
+                "Right-click a table header to arrange ratings, draft stats, and imported tier lists.",
             ),
             (
-                "📁 Custom MTGA Installs:",
-                "If MTG Arena is installed on a custom drive and dataset downloads fail, click 'File -> Locate MTGA Data Folder...' to link your local files.",
-            ),
-            (
-                "⚙️ Preferences:",
-                "Go to File -> Preferences... to change the UI Scale, switch to A-F letter grades, or enable colorful table rows based on mana cost.",
+                "Arena location",
+                "If Arena uses a custom folder, choose File > Locate MTGA Data Folder.",
             ),
         ]
 
         for title, desc in tips:
-            row = ttk.Frame(tips_frame)
-            row.pack(fill="x", pady=Theme.scaled_val(3))
+            row = ttk.Frame(tips_frame, style="Surface.TFrame")
+            row.pack(fill="x", pady=Theme.scaled_val(4))
 
             ttk.Label(
                 row,
                 text=title,
-                font=Theme.scaled_font(9, "bold"),
-                bootstyle="primary",
+                style="Surface.TLabel",
+                font=Theme.scaled_font(10, "bold"),
             ).pack(anchor="nw")
 
             lbl = ttk.Label(
                 row,
                 text=desc,
-                font=Theme.scaled_font(9),
-                bootstyle="info",
+                style="SurfaceMuted.TLabel",
                 justify="left",
             )
             lbl.pack(anchor="nw", fill="x", expand=True)
@@ -148,57 +144,84 @@ class DashboardFrame(ttk.Frame):
 
     def _build_no_data_state(self):
         """State 1: First time user, no data downloaded."""
-        self.no_data_frame = ttk.Frame(self)
+        self.no_data_frame = ttk.Frame(self, style="App.TFrame")
 
-        center_box = ttk.Frame(self.no_data_frame)
-        center_box.pack(expand=True)
+        center_box = ttk.Frame(
+            self.no_data_frame,
+            style="Surface.TFrame",
+            padding=Theme.scaled_val((28, 24)),
+        )
+        center_box.pack(
+            expand=True,
+            fill="x",
+            padx=Theme.scaled_val(80),
+            pady=Theme.scaled_val(24),
+        )
 
         ttk.Label(
             center_box,
-            text="👋 Welcome to MTGA Draft Tool",
-            font=Theme.scaled_font(13, "bold"),
-            bootstyle="primary",
-            justify="center",
-        ).pack(pady=(0, Theme.scaled_val(10)), anchor="center")
+            text="DATA SETUP",
+            style="SurfaceMuted.TLabel",
+            font=Theme.scaled_font(9, "bold"),
+        ).pack(pady=(0, Theme.scaled_val(6)), anchor="w")
+
+        ttk.Label(
+            center_box,
+            text="Set up your first draft dataset",
+            style="SurfaceTitle.TLabel",
+            font=Theme.scaled_font(20, "bold"),
+        ).pack(pady=(0, Theme.scaled_val(8)), anchor="w")
 
         desc1 = ttk.Label(
             center_box,
-            text="No 17Lands dataset is currently loaded. You need to download data before you can draft.",
-            font=Theme.scaled_font(9),
-            justify="center",
+            text="Draft recommendations need a local 17Lands dataset. You only have to complete these steps once per set.",
+            style="SurfaceMuted.TLabel",
+            justify="left",
         )
-        desc1.pack(pady=(0, Theme.scaled_val(15)), anchor="center")
+        desc1.pack(pady=(0, Theme.scaled_val(18)), anchor="w", fill="x")
         self._dynamic_wrap_labels.append(desc1)
 
-        step_frame = ttk.Frame(center_box)
-        step_frame.pack(anchor="center")
+        step_frame = ttk.Frame(center_box, style="Surface.TFrame")
+        step_frame.pack(anchor="w", fill="x")
 
         steps = [
-            "1. Click the 'Datasets' tab below.",
-            "2. Select the SET and EVENT you want to play.",
-            "3. Click the 'Download Selected Dataset' button.",
+            ("Open Datasets", "Choose the Datasets tab in the tools panel."),
+            ("Choose draft data", "Select a set, event, player group, and time period."),
+            ("Download", "The new file becomes available in the downloaded list."),
         ]
-        for s in steps:
+        for index, (title, description) in enumerate(steps, start=1):
+            row = ttk.Frame(step_frame, style="Surface.TFrame")
+            row.pack(fill="x", pady=Theme.scaled_val(5))
             ttk.Label(
-                step_frame,
-                text=s,
-                font=Theme.scaled_font(9, "bold"),
-            ).pack(anchor="w", pady=Theme.scaled_val(2))
+                row, text=str(index), style="Badge.TLabel", width=2, anchor="center"
+            ).pack(side="left", padx=(0, Theme.scaled_val(12)))
+            copy = ttk.Frame(row, style="Surface.TFrame")
+            copy.pack(side="left", fill="x", expand=True)
+            ttk.Label(
+                copy,
+                text=title,
+                style="Surface.TLabel",
+                font=Theme.scaled_font(10, "bold"),
+            ).pack(anchor="w")
+            ttk.Label(
+                copy, text=description, style="SurfaceMuted.TLabel"
+            ).pack(anchor="w")
 
-        expl_frame = ttk.Frame(center_box)
-        expl_frame.pack(pady=(Theme.scaled_val(15), 0), anchor="center")
+        expl_frame = ttk.Frame(center_box, style="Surface.TFrame")
+        expl_frame.pack(
+            pady=(Theme.scaled_val(18), 0), anchor="w", fill="x"
+        )
 
         ttk.Label(
             expl_frame,
-            text="Dataset Options:",
-            font=Theme.scaled_font(9, "bold"),
-            bootstyle="warning",
+            text="Choosing data",
+            style="SurfaceTitle.TLabel",
         ).pack(anchor="w", pady=(0, Theme.scaled_val(5)))
 
         lbl_ug = ttk.Label(
             expl_frame,
-            text="• USERS: 'All' pulls data from everyone. 'Top' pulls data exclusively from top players.",
-            font=Theme.scaled_font(9),
+            text="All players gives the broadest sample. Top players focuses the ratings on stronger drafters.",
+            style="SurfaceMuted.TLabel",
             justify="left",
         )
         lbl_ug.pack(anchor="w", pady=Theme.scaled_val(2))
@@ -206,43 +229,81 @@ class DashboardFrame(ttk.Frame):
 
         lbl_mg = ttk.Label(
             expl_frame,
-            text="• MIN GAMES: The minimum amount of data required to show color-specific win rates.",
-            font=Theme.scaled_font(9),
+            text="Minimum games controls how much evidence a color-specific rating needs before it appears.",
+            style="SurfaceMuted.TLabel",
             justify="left",
         )
         lbl_mg.pack(anchor="w", pady=Theme.scaled_val(2))
         self._dynamic_wrap_labels.append(lbl_mg)
 
-        tips = self._build_customization_tips(center_box)
-        tips.pack(pady=(Theme.scaled_val(20), 0), anchor="center")
-
     def _build_waiting_state(self):
         """State 2: Data downloaded, but no draft is active."""
-        self.waiting_frame = ttk.Frame(self)
+        self.waiting_frame = ttk.Frame(self, style="App.TFrame")
 
-        center_box = ttk.Frame(self.waiting_frame)
-        center_box.pack(expand=True)
+        center_box = ttk.Frame(
+            self.waiting_frame,
+            style="Surface.TFrame",
+            padding=Theme.scaled_val((28, 24)),
+        )
+        center_box.pack(
+            expand=True,
+            fill="x",
+            padx=Theme.scaled_val(80),
+            pady=Theme.scaled_val(24),
+        )
+
+        ttk.Label(
+            center_box,
+            text="LIVE DRAFT",
+            style="SurfaceMuted.TLabel",
+            font=Theme.scaled_font(9, "bold"),
+        ).pack(pady=(0, Theme.scaled_val(6)), anchor="w")
 
         self.lbl_waiting_title = ttk.Label(
             center_box,
-            text="Waiting for draft to begin...",
-            font=Theme.scaled_font(13, "bold"),
-            bootstyle="primary",
-            justify="center",
+            text="Ready when your draft starts",
+            style="SurfaceTitle.TLabel",
+            font=Theme.scaled_font(20, "bold"),
+            justify="left",
         )
-        self.lbl_waiting_title.pack(pady=(0, Theme.scaled_val(10)), anchor="center")
+        self.lbl_waiting_title.pack(
+            pady=(0, Theme.scaled_val(8)), anchor="w"
+        )
 
         self.lbl_waiting_desc = ttk.Label(
             center_box,
-            text="Ensure 'Detailed Logs (Plugin Support)' is checked in your MTGA Account Settings.",
-            font=Theme.scaled_font(9),
-            justify="center",
+            text="Open MTG Arena and begin a Limited draft. Picks and contextual recommendations will appear here automatically.",
+            style="SurfaceMuted.TLabel",
+            justify="left",
         )
-        self.lbl_waiting_desc.pack(pady=(0, Theme.scaled_val(20)), anchor="center")
+        self.lbl_waiting_desc.pack(
+            pady=(0, Theme.scaled_val(18)), anchor="w", fill="x"
+        )
         self._dynamic_wrap_labels.append(self.lbl_waiting_desc)
 
-        tips = self._build_customization_tips(center_box)
-        tips.pack(anchor="center")
+        checklist = ttk.Frame(center_box, style="Surface.TFrame")
+        checklist.pack(fill="x")
+        for title, description in (
+            (
+                "Detailed Logs enabled",
+                "In Arena, open Account settings and enable Detailed Logs (Plugin Support).",
+            ),
+            (
+                "Dataset active",
+                "The dataset shown in the app bar supplies ratings and recommendations.",
+            ),
+        ):
+            row = ttk.Frame(checklist, style="Surface.TFrame")
+            row.pack(fill="x", pady=Theme.scaled_val(5))
+            ttk.Label(
+                row,
+                text=title,
+                style="Surface.TLabel",
+                font=Theme.scaled_font(10, "bold"),
+            ).pack(anchor="w")
+            ttk.Label(
+                row, text=description, style="SurfaceMuted.TLabel"
+            ).pack(anchor="w")
 
     def _build_deck_recovery_state(self):
         """State 2C: Draft Completed. Shows Fantasy-style Recap."""
@@ -429,12 +490,6 @@ class DashboardFrame(ttk.Frame):
 
         bind_scroll(self._sidebar_canvas, self._sidebar_canvas.yview_scroll)
         bind_scroll(self.sidebar_container, self._sidebar_canvas.yview_scroll)
-        self.sidebar_container.bind(
-            "<Enter>",
-            lambda e: bind_scroll(
-                self.sidebar_container, self._sidebar_canvas.yview_scroll
-            ),
-        )
 
         if self.sidebar_visible:
             self.h_splitter.add(self.sidebar_frame, weight=0)

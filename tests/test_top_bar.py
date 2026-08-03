@@ -191,12 +191,9 @@ def test_on_event_change_updates_group_dropdown(root, mock_app_context):
         mock_group_change.assert_called_once()
 
 
-@patch("src.ui.top_bar.write_configuration")
 @patch("src.ui.top_bar.os.path.basename", return_value="path.json")
-def test_on_group_change_loads_dataset(
-    mock_basename, mock_write, root, mock_app_context
-):
-    """Verify selecting a final dataset combination successfully triggers the orchestrator to load the file."""
+def test_on_group_change_loads_dataset(mock_basename, root, mock_app_context):
+    """Dataset parsing is queued so it cannot freeze Tk's event loop."""
     top_bar = TopBarControls(root, mock_app_context)
     mock_app_context._initialized = True
 
@@ -207,14 +204,7 @@ def test_on_group_change_loads_dataset(
 
     top_bar.on_group_change()
 
-    # 1. Scanner should be told to read the JSON file
-    mock_app_context.orchestrator.scanner.retrieve_set_data.assert_called_once_with(
+    mock_app_context.orchestrator.request_dataset_load.assert_called_once_with(
         "/mock/path.json"
     )
-
-    # 2. Config should be updated and saved
-    assert mock_app_context.configuration.card_data.latest_dataset == "path.json"
-    mock_write.assert_called_once()
-
-    # 3. Math engines and UI should be refreshed
-    mock_app_context.orchestrator.request_math_update.assert_called_once()
+    mock_app_context.orchestrator.scanner.retrieve_set_data.assert_not_called()

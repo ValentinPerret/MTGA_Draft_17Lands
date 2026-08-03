@@ -2,6 +2,13 @@
 
 Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 
+**Data attribution:** Card-performance statistics are derived from
+[17Lands](https://www.17lands.com/). Please review its
+[usage guidelines](https://www.17lands.com/usage_guidelines),
+[terms](https://www.17lands.com/terms_of_service), and
+[public-dataset licensing](https://api.17lands.com/public_datasets) before
+redistributing data or operating a bulk-data workflow.
+
 **This application will automatically support new sets as soon as the sets are released on Arena _and_ the data is available on the [17Lands card ratings](https://www.17lands.com/card_ratings) page.**
 
 **Supported Events:** Premier Draft, Traditional Draft, Quick Draft, Sealed, Traditional Sealed, and Cube.
@@ -12,6 +19,8 @@ Magic: The Gathering Arena draft tool that utilizes 17Lands data.
 - [Run Steps: Standalone App (Windows / macOS / Linux)](#run-steps-standalone-app-windows--macos--linux)
 - [Run Steps: Python (Windows / macOS / Linux)](#run-steps-python-windows--macos--linux)
 - [Marquee Features](#marquee-features)
+- [Contextual Draft Copilot](#contextual-draft-copilot)
+- [Post-Match Game Review](#post-match-game-review)
 - [UI Navigation & Tabs](#ui-navigation--tabs)
 - [Settings & Preferences](#settings--preferences)
 - [File Locations](#file-locations)
@@ -80,8 +89,78 @@ macOS actively quarantines unsigned apps downloaded from the internet. To run th
 - **Automated Cloud Datasets:** The application uses a custom Cloud ETL Pipeline that compiles and distributes the latest 17Lands telemetry every day. When you open the app, it instantly syncs the data for active Arena events in the background so you never have to manually scrape data again. You can view the live dataset schedule [here](https://unrealities.github.io/MTGA_Draft_17Lands/).
 - **Zero-Day Card Recognition:** Alternate art cards and basic lands now instantly display their correct names on release day by dynamically querying your local MTG Arena SQLite database for unknown IDs, completely eliminating the wait for third-party API updates.
 - **Mini Mode:** Click the `Mini Mode` button to hide the main dashboard and display a compact, draggable, always-on-top window. Perfect for single-monitor setups or playing seamlessly over the Arena client.
+- **Post-Match Game Review:** Reconstructs completed Limited games from Arena's detailed log, highlights evidence-backed mistakes and strengths, and tracks recurring coaching themes over time. A manual local Codex pass can review richer combat and sequencing decisions.
 - **Dynamic Columns:** You can customize the columns displayed in any table (Pack, Card Pool, Compare) by **Right-Clicking the column header**. Add specific 17Lands stats or remove ones you don't need. The app remembers your layout automatically.
 - **Themes & Mana Flairs:** Under the `Theme` menu, you can select custom "Mana Flairs" (Forest, Island, Swamp, Mountain, Plains, Wastes) or fall back to your Native OS System theme.
+
+---
+
+## Contextual Draft Copilot
+
+This fork includes a feature-flagged `contextual_v2` advisor alongside the original
+legacy advisor. It evaluates every card through bounded candidate-deck searches and
+accounts for adjusted 17Lands statistics, lane probabilities, marginal replacement,
+mana, curve, interaction, signals, uncertainty, and declarative synergy packages.
+Innistrad Planar Cube includes explicit roles for Humans, Zombies, Madness,
+Reanimator, Spider Spawning, Spells, Sacrifice, and Vampires.
+
+The live recommendation shows the suggested pick, alternatives, confidence, likely
+lanes, expected final-deck inclusion, replacement card, score components, data
+caveats, and useful future picks. It remains read-only and never clicks or controls
+Arena. The original advisor is always available through Preferences or the `V1`/`V2`
+Mini Mode control.
+
+An optional **local Codex review** can selectively review close or complex decisions
+on this Mac. It invokes the locally installed Codex runtime with the existing ChatGPT
+sign-in; the application does not read, copy, store, or print the credentials. Each
+review is ephemeral, read-only, tool-disabled, schema-validated, cached, and performed
+off the UI thread. Only minimized draft state is sent—never `Player.log`, account
+identifiers, machine paths, or unrelated history. The deterministic recommendation
+always appears first and remains the fallback.
+
+To use it:
+
+1. Enable **Detailed Logs (Plugin Support)** in Arena and restart Arena.
+2. Open **File -> Preferences**, select `contextual_v2`, and optionally enable
+   **Local Codex Review**.
+3. Confirm the ChatGPT desktop app's bundled Codex is signed in (`codex login status`
+   is an optional terminal check).
+4. Use the Mini Mode `AI` button or **Analyze Deeper with Codex** for a manual pass.
+
+See [Contextual Draft Copilot architecture](docs/contextual-draft-copilot.md) for
+privacy, routing, testing, limitations, and troubleshooting details.
+
+---
+
+## Post-Match Game Review
+
+Open the **Game Review** tab after a Limited game and click **Scan Player.log**.
+The app reconstructs the decisions Arena recorded, immediately runs conservative
+checks, and shows a chronological action timeline. Select a completed match and click
+**Analyze Game + Deck** for a deeper, manual review of observable combat, sequencing,
+mana, and interaction decisions. The review can take up to two minutes and runs in
+the background without freezing the interface.
+
+The **Decision Feedback** view explains pivotal choices from the opening hand through
+the late game. Each item shows the exact recorded choice, an assessment, confidence,
+why the line was good or questionable, a better line (or why the original line should
+be kept), and a reusable lesson. **Review All** processes every unreviewed completed
+game sequentially with explicit per-game progress; it never starts multiple Codex
+reviews at once.
+
+Arena also records the exact submitted main deck and sideboard. The **Deck Changes**
+view uses those lists to suggest concrete cuts and additions when construction or
+repeated same-deck evidence supports a change. A single loss, an undrawn card, or a
+gameplay mistake is never enough by itself to trigger a cut.
+
+The **Progress** view tracks your Limited record, number of Codex-reviewed games,
+recent trend, and recurring focus areas. Only a hashed match key and the structured
+coaching result are stored locally. Raw logs, account identifiers, opponent names,
+and machine paths are not saved or sent to Codex. Findings marked **possible** reflect
+hidden information or Arena state that the log cannot fully represent.
+
+See [Game Review architecture and limitations](docs/game-review.md) for the evidence
+model, privacy boundaries, and troubleshooting.
 
 ---
 
@@ -99,6 +178,7 @@ The application is structured into a collapsible Live Dashboard and several func
 - **Datasets:** Manage, download, and update 17Lands card data locally. Provides detailed download summaries, including exactly how many MTGA cards were successfully matched with 17Lands telemetry data. Choose a **Time Period** (All Time, Latest Event, Last Week, etc.) to match 17Lands, and use **Clear Set History** to delete old downloaded datasets and re-sync a clean copy if loading slows down.
 - **Card Pool:** View the cards you have drafted. Features a **"Switch to Visual View"** button to stack your cards into mana curve columns exactly like MTG Arena does.
 - **Deck Builder:** A fully interactive deck construction environment combining Auto-Generation and manual Custom building. Features a 1-click **Auto-Lands** button, a sleek basics toolbar, and live deck size validation.
+- **Game Review:** Scan completed Limited games, inspect detailed pivotal-decision feedback and the recorded action timeline, review evidence-linked deck changes from the exact submitted deck and sideboard, batch-review unreviewed games with local Codex, and monitor recurring improvement areas.
 - **Comparisons:** Search and add multiple cards to directly compare their stats side-by-side.
 - **Tier Lists:** Import and manage custom tier lists from the 17Lands API.
 
@@ -111,6 +191,9 @@ Access Settings via `File -> Preferences...`
 - **Win Rate Format:** Switch the results for win rate fields (GIHWR, OHWR) between a Percentage (55.0%), a 5-point Rating scale, or Grades (A+ to F).
 - **Deck Filter Format:** Switch the Deck Filter dropdown to display either color permutations (e.g., UB, BG) or guild/shard names (e.g., Dimir, Golgari).
 - **UI Scale:** Increase or decrease the application text and image sizes globally (from 40% up to 250%). Perfect for smaller laptop displays or massive 4k monitors.
+- **Advisor Engine:** Switch instantly between `legacy` and `contextual_v2`.
+- **Enable Local Codex Review:** Opt in to selective, cached second-pass reviews using the locally authenticated Codex installation. Leave the model override blank to use Codex's recommended default.
+- **Automatic Reviews / Draft:** Limit automatic Codex reviews; the default is 10 and clear local decisions are skipped.
 - **Highlight Row by Mana Cost:** Colors the background of table rows based on the card's color identity.
 - **Auto-Switch Deck Filter to Best Colors:** When the filter is set to "Auto", the app tracks your picks and will automatically switch to displaying data for your confirmed color pair once your lane is identified.
 - **Enable Draft Log Creation:** Records the draft step-by-step in a readable log file within the `./Logs` folder.
@@ -133,6 +216,7 @@ The application looks for the configuration file in the following order:
 - Downloaded card data is stored in the `Sets` folder.
 - Custom Tier lists are stored in the `Tier` folder.
 - Application debug logs are stored in the `Debug` folder, and draft logs are in the `Logs` folder.
+- Game Review history is stored locally in `GameReviews/history.json` beside the system configuration file. It contains hashed match keys and structured coaching summaries, never the raw Arena log.
 
 ---
 
@@ -168,6 +252,20 @@ If the log file ever severely desyncs, click the **Reload** button in the main d
 ### Arena Log Issues
 If the application cannot detect an active event, click `File -> Read Player.log` and ensure the proper file is selected.
 
+If the overlay reports that detailed logs are disabled, open **Arena -> Options ->
+Account**, enable **Detailed Logs (Plugin Support)**, restart Arena, and then use
+**Resync from Player.log**. Pack contents may still appear while detailed logs are
+off, but the picked pool cannot be reconstructed reliably.
+
+### Local Codex Review
+
+Codex review is optional. If it is unavailable or times out, the deterministic local
+ranking stays visible. On this macOS setup, the app first looks for the Codex runtime
+bundled with `/Applications/ChatGPT.app`, then falls back to `codex` on `PATH`.
+Sign in to Codex through ChatGPT; do not place subscription credentials in this repo.
+The feature consumes the ChatGPT account's Codex allowance and is not a substitute
+for a supported general-purpose API backend in redistributed builds.
+
 ### Custom Installation Folders
 If MTG Arena is installed in a non-standard directory (e.g., a secondary Steam library drive), the application might fail to automatically locate the local MTGA card database, causing dataset downloads to fail. To fix this, click `File -> Locate MTGA Data Folder...` in the top menu bar and select your custom `MTGA_Data` folder.
 
@@ -183,6 +281,8 @@ For developers looking to contribute, fork, or understand the architecture of th
 - `03-business-logic.md`
 - `04-external-integrations.md`
 - `05-server-etl-pipeline.md`
+- `contextual-draft-copilot.md`
+- `contextual-draft-copilot-baseline.md`
 
 ### Environment Setup
 
@@ -204,6 +304,12 @@ poetry run pytest tests/
 To run tests with coverage reporting:
 ```bash
 poetry run pytest tests/ --cov=src
+```
+
+To benchmark the contextual hot path without making a Codex call:
+
+```bash
+poetry run python Tools/benchmark_contextual_copilot.py
 ```
 
 ### Automated Releases & Version Management

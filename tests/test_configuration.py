@@ -119,7 +119,6 @@ def test_get_config_path():
         # Expected: AppData/MTGA_Draft_Tool/config.json (separators match runner OS)
         expected = os.path.join(mock_appdata, "MTGA_Draft_Tool", "config.json")
         assert get_config_path() == expected
-
     # Mac Case
     with (
         patch("sys.platform", "darwin"),
@@ -142,3 +141,17 @@ def test_get_config_path():
         # On Linux logic: expanduser("~/.config") -> "/User/Home/.config"
         expected = os.path.join("/User/Home/.config", "MTGA_Draft_Tool", "config.json")
         assert get_config_path() == expected
+
+
+def test_contextual_advisor_configuration_defaults_and_validation():
+    config = Configuration()
+    assert config.settings.advisor_engine == "contextual_v2"
+    assert config.model_assistance.enabled is True
+    assert config.model_assistance.provider == "codex"
+    assert config.model_assistance.request_timeout_seconds == 12.0
+    assert config.model_assistance.automatic_call_limit_per_draft == 10
+
+    invalid = Configuration.model_validate(
+        {"settings": {"advisor_engine": "unknown"}}
+    )
+    assert invalid.settings.advisor_engine == "contextual_v2"

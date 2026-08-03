@@ -275,6 +275,13 @@ def main():
         root = ttk.Window(themename="cyborg")
         root.withdraw()
 
+        # Native macOS Quit events can arrive while the splash worker is still
+        # inside SSL. Avoid Python interpreter finalization with daemon threads
+        # active; the fully initialized app replaces this with its save-and-exit
+        # handler below.
+        if sys.platform == "darwin":
+            root.createcommand("::tk::mac::Quit", lambda: os._exit(0))
+
         # Initialize Styling Engine
         # We apply a baseline theme so the splash screen matches the app
         Theme.apply(
@@ -288,6 +295,8 @@ def main():
                 splash.close()
                 root.update()
                 app = DraftApp(root, data["scanner"], data["config"])
+                if sys.platform == "darwin":
+                    root.createcommand("::tk::mac::Quit", app._on_close)
 
                 # 1. Show the window skeleton immediately
                 root.deiconify()
@@ -320,9 +329,9 @@ def main():
             root.mainloop()
     except KeyboardInterrupt:
         logger.info("Application stopped by user (KeyboardInterrupt).")
-        if root:
-            root.destroy()
-        sys.exit(0)
+    # DraftApp._on_close already saves state. Any other mainloop exit must avoid
+    # interpreter teardown while daemonized network/image workers are active.
+    os._exit(0)
 
 
 if __name__ == "__main__":

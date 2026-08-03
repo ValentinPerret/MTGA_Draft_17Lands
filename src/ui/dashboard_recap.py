@@ -6,6 +6,7 @@ Calculates and displays Pool Grades, Steals, Reaches, and Synergies.
 
 import tkinter
 from tkinter import ttk
+import queue
 import threading
 from src import constants
 from src.ui.styles import Theme
@@ -19,8 +20,50 @@ class DraftRecapScreen(ttk.Frame):
         super().__init__(parent)
         self.launch_sealed_callback = launch_sealed_callback
         self._dynamic_wrap_labels = []
+        self._record_queue = queue.Queue()
+        self._record_request_token = 0
+        self._record_poll_id = None
         self._build_ui()
         self.bind("<Configure>", self._on_resize)
+        self._record_poll_id = self.after(100, self._poll_record_queue)
+
+    def destroy(self):
+        if self._record_poll_id is not None:
+            try:
+                self.after_cancel(self._record_poll_id)
+            except tkinter.TclError:
+                pass
+            self._record_poll_id = None
+        super().destroy()
+
+    def _poll_record_queue(self):
+        """Apply worker results only from Tk's owning thread."""
+        try:
+            while True:
+                token, record = self._record_queue.get_nowait()
+                if token == self._record_request_token:
+                    self._apply_17lands_record(record)
+        except queue.Empty:
+            pass
+
+        if self.winfo_exists():
+            self._record_poll_id = self.after(100, self._poll_record_queue)
+
+    def _apply_17lands_record(self, record):
+        if not record or record.get("wins") is None:
+            return
+        wins, losses = record["wins"], record["losses"]
+        self.lbl_actual_record.config(
+            text=f"Actual 17Lands Record: {wins} Wins - {losses} Losses",
+            bootstyle=(
+                "success" if wins >= 3 else ("warning" if wins >= 1 else "danger")
+            ),
+        )
+        self.lbl_actual_record.pack(
+            anchor="center", pady=Theme.scaled_val((5, 0))
+        )
+        self.btn_17lands_link.config(command=lambda: open_file(record["url"]))
+        self.btn_17lands_link.pack(side="right", padx=Theme.scaled_val((0, 10)))
 
     def _on_resize(self, event):
         if event.widget == self and event.width > 100:
@@ -419,36 +462,16 @@ class DraftRecapScreen(ttk.Frame):
 
         # 9. 17LANDS API FETCH
         if draft_id:
+            self._record_request_token += 1
+            request_token = self._record_request_token
 
             def fetch_17lands_record():
                 from src.seventeenlands import Seventeenlands
 
-                record = Seventeenlands().get_draft_record(draft_id)
-
-                def apply_ui():
-                    if record and record.get("wins") is not None:
-                        w, l = record["wins"], record["losses"]
-                        self.lbl_actual_record.config(
-                            text=f"Actual 17Lands Record: {w} Wins - {l} Losses",
-                            bootstyle=(
-                                "success"
-                                if w >= 3
-                                else ("warning" if w >= 1 else "danger")
-                            ),
-                        )
-                        self.lbl_actual_record.pack(
-                            anchor="center", pady=Theme.scaled_val((5, 0))
-                        )
-                        self.btn_17lands_link.config(
-                            command=lambda: open_file(record["url"])
-                        )
-                        self.btn_17lands_link.pack(
-                            side="right", padx=Theme.scaled_val((0, 10))
-                        )
-
                 try:
-                    self.after(0, apply_ui)
-                except RuntimeError:
-                    pass
+                    record = Seventeenlands().get_draft_record(draft_id)
+                except Exception:
+                    record = None
+                self._record_queue.put((request_token, record))
 
             threading.Thread(target=fetch_17lands_record, daemon=True).start()

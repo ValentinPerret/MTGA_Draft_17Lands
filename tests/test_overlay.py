@@ -96,7 +96,6 @@ def test_compact_overlay_resizing_logic(mock_wm, mock_ov, root, mock_app_context
 
     with patch.object(overlay, "geometry") as mock_geom:
         overlay._do_resize(MotionEvent())
-        # Width: 300 + (550 - 500) = 350. Height: 600 + (550 - 500) = 650.
         mock_geom.assert_called_with("350x650")
 
     # Stop resize should save geometry to config
@@ -197,6 +196,74 @@ def test_compact_overlay_update_data_population(
     # Verify 'Picked' formatting
     counterspell_tags = tree.item(rows[1])["tags"]
     assert "picked" in counterspell_tags
+
+
+@patch("tkinter.Toplevel.overrideredirect")
+@patch("tkinter.Toplevel.wm_overrideredirect")
+def test_compact_overlay_combines_archetype_and_overall_gihwr(
+    mock_wm, mock_ov, root, mock_app_context
+):
+    """One compact cell shows archetype GIHWR followed by overall GIHWR."""
+    config = Configuration()
+    config.settings.column_configs["overlay_table"] = [
+        "name",
+        "value",
+        "gihwr_all",
+        "gihwr",
+    ]
+    config.settings.column_display_orders["overlay_table"] = [
+        "name",
+        "value",
+        "gihwr_all",
+        "gihwr",
+    ]
+    config.settings.table_sort_states["pack"] = {
+        "column": "gihwr_all",
+        "reverse": True,
+    }
+    overlay = CompactOverlay(root, mock_app_context, config, lambda: None)
+
+    assert overlay.table_manager.active_fields == ["name", "value", "gihwr"]
+    assert config.settings.column_display_orders["overlay_table"] == [
+        "name",
+        "value",
+        "gihwr",
+    ]
+    assert config.settings.table_sort_states["pack"]["column"] == "gihwr"
+
+    overlay.update_data(
+        pack_cards=[
+            {
+                "name": "Off-Lane Bomb",
+                "colors": ["R"],
+                "deck_colors": {"All Decks": {"gihwr": 63.4}},
+            },
+            {
+                "name": "On-Lane Card",
+                "colors": ["U"],
+                "deck_colors": {
+                    "All Decks": {"gihwr": 59.2},
+                    "UB": {"gihwr": 63.1},
+                },
+            },
+        ],
+        colors=["UB"],
+        metrics=MagicMock(),
+        tier_data={},
+        current_pick=1,
+        recommendations=[],
+    )
+
+    tree = overlay.table_manager.tree
+    fields = overlay.table_manager.active_fields
+    rows_by_name = {
+        tree.item(row)["values"][fields.index("name")]: tree.item(row)["values"]
+        for row in tree.get_children()
+    }
+
+    assert rows_by_name["Off-Lane Bomb"][fields.index("gihwr")] == "- (63%)"
+    assert rows_by_name["On-Lane Card"][fields.index("gihwr")] == "63% (59%)"
+    assert tree.heading("gihwr", "text") == "GIHWR ▼"
 
 
 @patch("tkinter.Toplevel.overrideredirect")

@@ -113,6 +113,20 @@ class TestDraftRecapScreen:
         # Verify the background thread was started to query the API
         mock_thread.assert_called_once()
 
+    def test_17lands_record_is_applied_from_main_thread_queue(self, root):
+        recap = DraftRecapScreen(root)
+        recap._record_request_token = 3
+        recap._record_queue.put(
+            (3, {"wins": 5, "losses": 2, "url": "https://www.17lands.com/draft/test"})
+        )
+        recap.after_cancel(recap._record_poll_id)
+        recap._record_poll_id = None
+
+        recap._poll_record_queue()
+
+        assert "5 Wins - 2 Losses" in recap.lbl_actual_record.cget("text")
+        assert recap.lbl_actual_record.winfo_manager() == "pack"
+
     def test_recap_handles_empty_or_small_pools(self, root, mock_metrics):
         """Verify no errors are thrown if the pool is too small to analyze."""
         recap = DraftRecapScreen(root)

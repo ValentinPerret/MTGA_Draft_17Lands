@@ -4,6 +4,8 @@ Compact Mini Mode Window for in-game drafting.
 """
 
 import tkinter
+import os
+import time
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from src import constants
@@ -21,6 +23,9 @@ from src.configuration import write_configuration
 from src.card_logic import format_win_rate
 
 
+LEGACY_OVERALL_GIHWR_FIELD = "gihwr_all"
+
+
 class CompactOverlay(tb.Toplevel):
     def __init__(self, parent, app_context, configuration, on_restore):
         super().__init__(title="Mini Mode", topmost=True)
@@ -32,6 +37,8 @@ class CompactOverlay(tb.Toplevel):
         self.current_pack_cards = []
         self.current_pool_cards = []
 
+        self._ensure_compact_gihwr_column()
+
         if "overlay_pool_table" not in self.configuration.settings.column_configs:
             self.configuration.settings.column_configs["overlay_pool_table"] = [
                 "name",
@@ -40,10 +47,11 @@ class CompactOverlay(tb.Toplevel):
             ]
 
         self.overrideredirect(True)
+        self.minsize(Theme.scaled_val(250), Theme.scaled_val(200))
         geom = getattr(
             self.configuration.settings,
             "overlay_geometry",
-            f"{Theme.scaled_val(380)}x{Theme.scaled_val(600)}+50+50",
+            f"{Theme.scaled_val(300)}x{Theme.scaled_val(600)}+50+50",
         )
         self.geometry(geom)
 
@@ -53,6 +61,68 @@ class CompactOverlay(tb.Toplevel):
             pass
 
         self._build_ui()
+        self._sync_advisor_controls()
+
+    def _ensure_compact_gihwr_column(self):
+        """Collapse legacy dual-GIHWR layouts back into one compact column."""
+        configs = self.configuration.settings.column_configs
+        fields = list(configs.get("overlay_table", ["name", "value", "gihwr"]))
+        fields = [field for field in fields if field != LEGACY_OVERALL_GIHWR_FIELD]
+        if "gihwr" not in fields:
+            fields.append("gihwr")
+        configs["overlay_table"] = list(dict.fromkeys(fields))
+
+        display_orders = getattr(
+            self.configuration.settings, "column_display_orders", {}
+        )
+        if "overlay_table" in display_orders:
+            display_orders["overlay_table"] = [
+                field
+                for field in display_orders["overlay_table"]
+                if field != LEGACY_OVERALL_GIHWR_FIELD
+            ]
+
+        pack_sort = getattr(
+            self.configuration.settings, "table_sort_states", {}
+        ).get("pack", {})
+        if pack_sort.get("column") == LEGACY_OVERALL_GIHWR_FIELD:
+            pack_sort["column"] = "gihwr"
+
+    def _label_compact_gihwr_column(self):
+        """Use the compact label while retaining the active sort indicator."""
+        tree = self.table_manager.tree
+        if "gihwr" not in tree["columns"]:
+            return
+        label = "GIHWR"
+        tree.base_labels["gihwr"] = label
+        if tree.active_sort_column == "gihwr":
+            reverse = tree.column_sort_state.get("gihwr", False)
+            label = f"{label} {'▼' if reverse else '▲'}"
+        tree.heading("gihwr", text=label)
+
+    @staticmethod
+    def _format_compact_gihwr(card, active_filter):
+        """Render archetype GIHWR followed by the all-decks rate."""
+        deck_stats = card.get("deck_colors", {})
+
+        def _percent(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return "-"
+            return f"{number:.0f}%" if number > 0.0 else "-"
+
+        overall = _percent(
+            deck_stats.get(constants.FILTER_OPTION_ALL_DECKS, {}).get(
+                constants.DATA_FIELD_GIHWR, 0.0
+            )
+        )
+        archetype = "-"
+        if active_filter and active_filter != constants.FILTER_OPTION_ALL_DECKS:
+            archetype = _percent(
+                deck_stats.get(active_filter, {}).get(constants.DATA_FIELD_GIHWR, 0.0)
+            )
+        return f"{archetype} ({overall})"
 
     def _start_move(self, event):
         self.x = event.x
@@ -120,6 +190,26 @@ class CompactOverlay(tb.Toplevel):
         )
         self.btn_settings.pack(side=RIGHT, padx=Theme.scaled_val(2))
 
+        self.btn_refresh = tb.Button(
+            header, text="↻", bootstyle="link", command=self._manual_resync
+        )
+        self.btn_refresh.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_analyze = tb.Button(
+            header, text="AI", bootstyle="link", command=self._analyze_deeper
+        )
+        self.btn_analyze.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_engine = tb.Button(
+            header,
+            text="V2" if self.configuration.settings.advisor_engine == "contextual_v2" else "V1",
+            bootstyle="link",
+            command=self._toggle_engine,
+        )
+        self.btn_engine.pack(side=RIGHT, padx=Theme.scaled_val(1))
+        self.btn_pause = tb.Button(
+            header, text="⏸", bootstyle="link", command=self._toggle_monitoring
+        )
+        self.btn_pause.pack(side=RIGHT, padx=Theme.scaled_val(1))
+
         self.lbl_status = tb.Label(
             header,
             text="Waiting...",
@@ -179,6 +269,7 @@ class CompactOverlay(tb.Toplevel):
             height=1,
         )
         self.table_manager.pack(fill=BOTH, expand=True)
+        self._label_compact_gihwr_column()
 
         # Missing Table (Hidden initially)
         self.missing_frame = tb.Frame(self.tab_pack)
@@ -301,6 +392,25 @@ class CompactOverlay(tb.Toplevel):
                 )
         menu.add_cascade(label="User Group", menu=group_menu)
         menu.add_separator()
+        pause_label = (
+            "Resume Monitoring"
+            if getattr(self.orchestrator, "monitoring_paused", False)
+            else "Pause Monitoring"
+        )
+        menu.add_command(label=pause_label, command=self._toggle_monitoring)
+        engine_label = (
+            "Use Legacy Advisor"
+            if self.configuration.settings.advisor_engine == "contextual_v2"
+            else "Use Contextual Advisor"
+        )
+        menu.add_command(label=engine_label, command=self._toggle_engine)
+        menu.add_command(label="Resync from Player.log", command=self._manual_resync)
+        if self.configuration.model_assistance.enabled:
+            menu.add_command(label="Analyze Deeper with Codex", command=self._analyze_deeper)
+            menu.add_command(
+                label="Disable Codex Review", command=self._disable_model_assistance
+            )
+        menu.add_separator()
         menu.add_command(
             label="Preferences...", command=self.app_context._open_settings
         )
@@ -309,6 +419,49 @@ class CompactOverlay(tb.Toplevel):
             self.btn_settings.winfo_rootx(),
             self.btn_settings.winfo_rooty() + self.btn_settings.winfo_height(),
         )
+
+    def _toggle_monitoring(self):
+        paused = self.orchestrator.toggle_paused()
+        self.btn_pause.configure(text="▶" if paused else "⏸")
+        self.lbl_status.configure(text="PAUSED" if paused else "Resuming…")
+
+    def _toggle_engine(self):
+        current = self.configuration.settings.advisor_engine
+        self.configuration.settings.advisor_engine = (
+            "legacy" if current == "contextual_v2" else "contextual_v2"
+        )
+        write_configuration(self.configuration)
+        self._sync_advisor_controls()
+        self.orchestrator.request_math_update()
+
+    def _disable_model_assistance(self):
+        self.configuration.model_assistance.enabled = False
+        write_configuration(self.configuration)
+        self._sync_advisor_controls()
+        self.orchestrator.request_math_update()
+
+    def _sync_advisor_controls(self):
+        """Make the compact controls communicate their active availability."""
+        use_v2 = self.configuration.settings.advisor_engine == "contextual_v2"
+        ai_enabled = use_v2 and self.configuration.model_assistance.enabled
+        self.btn_engine.configure(text="V2" if use_v2 else "V1")
+        self.btn_analyze.configure(
+            state=tkinter.NORMAL if ai_enabled else tkinter.DISABLED,
+            bootstyle="primary-link" if ai_enabled else "secondary-link",
+        )
+
+    def _analyze_deeper(self):
+        if hasattr(self.app_context, "controller"):
+            self.app_context.controller.request_deeper_analysis()
+
+    def _manual_resync(self):
+        if getattr(self.orchestrator, "monitoring_paused", False):
+            self.orchestrator.set_paused(False)
+            self.btn_pause.configure(text="⏸")
+        if hasattr(self.app_context, "controller"):
+            self.app_context.controller.force_reload()
+        else:
+            self.orchestrator.trigger_full_scan()
 
     def _trigger_refresh(self):
         if hasattr(self.orchestrator, "refresh_callback"):
@@ -325,6 +478,7 @@ class CompactOverlay(tb.Toplevel):
         picked_cards=None,
         scores=None,
     ):
+        self._sync_advisor_controls()
         evt = self.app_context.vars["selected_event"].get()
         grp = self.app_context.vars["selected_group"].get()
         filt = self.app_context.vars["deck_filter"].get()
@@ -365,7 +519,18 @@ class CompactOverlay(tb.Toplevel):
         self.current_missing_cards = missing_cards
 
         pk, pi = self.orchestrator.scanner.retrieve_current_pack_and_pick()
-        self.lbl_status.config(text=f"P{pk} / P{pi}")
+        status_text = f"P{pk} / P{pi}"
+        status_style = "inverse-secondary"
+        try:
+            age = time.time() - os.path.getmtime(self.orchestrator.scanner.arena_file)
+            incomplete = bool(pk and pi > 1 and not taken_cards)
+            if getattr(self.orchestrator, "monitoring_paused", False):
+                status_text, status_style = "PAUSED", "warning"
+            elif age > 60 or incomplete:
+                status_text, status_style = f"STALE · P{pk}/{pi}", "warning"
+        except Exception:
+            pass
+        self.lbl_status.config(text=status_text, bootstyle=status_style)
 
         self.advisor_panel.update_recommendations(recommendations)
         self.signal_meter.update_values(scores if scores is not None else {})
@@ -507,6 +672,10 @@ class CompactOverlay(tb.Toplevel):
                             if rec and rec.wheel_chance > 0
                             else "-"
                         )
+                    elif field == constants.DATA_FIELD_GIHWR:
+                        row_values.append(
+                            self._format_compact_gihwr(card, active_filter)
+                        )
                     elif "TIER" in field:
                         tier_obj = tier_data.get(field) if tier_data else None
                         if tier_obj and name in tier_obj.ratings:
@@ -564,6 +733,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.tree, lambda: self.current_pack_cards
+        )
 
         _populate_tree(
             self.tree,
@@ -582,6 +754,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.missing_tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.missing_tree, lambda: self.current_missing_cards
+        )
 
         _populate_tree(
             self.missing_tree,
@@ -599,6 +774,9 @@ class CompactOverlay(tb.Toplevel):
                 add="+",
             )
             self.pool_tree._selection_bound = True
+        self.app_context.interactions.bind_hover_preview(
+            self.pool_tree, lambda: self.current_pool_cards
+        )
 
         _populate_tree(
             self.pool_tree,
@@ -615,7 +793,16 @@ class CompactOverlay(tb.Toplevel):
             if region not in ("tree", "cell"):
                 return
 
-        selection = tree.selection()
+        clicked_row = (
+            tree.identify_row(event.y)
+            if hasattr(event, "y") and hasattr(tree, "identify_row")
+            else ""
+        )
+        if clicked_row:
+            tree.selection_set(clicked_row)
+            selection = [clicked_row]
+        else:
+            selection = tree.selection()
         if not selection:
             return
 

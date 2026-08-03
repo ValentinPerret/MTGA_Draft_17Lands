@@ -37,6 +37,9 @@ class TestSettingsWindow:
         assert window.vars["result_format"].get() == constants.RESULT_FORMAT_WIN_RATE
         assert window.vars["filter_format"].get() == constants.DECK_FILTER_FORMAT_COLORS
         assert window.vars["ui_size"].get() == constants.UI_SIZE_DEFAULT
+        assert window.vars["advisor_engine"].get() == "contextual_v2"
+        assert window.vars["model_assistance_enabled"].get() == 1
+        assert window.vars["model_call_limit"].get() == 10
 
         # Check integer conversion for booleans (True -> 1)
         assert window.vars["draft_log_enabled"].get() == 1  # Default is True
@@ -65,6 +68,9 @@ class TestSettingsWindow:
 
         assert config.settings.always_on_top is True
         assert mock_write.called
+
+        window.vars["model_assistance_enabled"].set(1)
+        assert config.model_assistance.enabled is True
 
     @patch("src.ui.windows.settings.reset_configuration")
     def test_reset_defaults_flow(self, mock_reset, root, config):

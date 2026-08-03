@@ -7,7 +7,7 @@ import tkinter
 from tkinter import ttk, messagebox
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
-import requests, io, math, re, threading, hashlib, os
+import requests, io, math, re, hashlib, os, queue
 from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
@@ -220,16 +220,43 @@ class CardToolTip(tkinter.Toplevel):
     _MAX_IN_MEMORY_IMAGES = 60
 
     @classmethod
-    def create(cls, parent, card, images_enabled, scale):
-        """Factory method ensures only one tooltip exists globally and avoids flickering loops."""
-        if cls._active_tooltip and cls._active_tooltip.winfo_exists():
-            cls._active_tooltip._close()
-        cls._active_tooltip = cls(parent, card, images_enabled, scale)
+    def create(cls, parent, card, images_enabled, scale, persistent=True):
+        """Show one card preview, replacing any previous preview."""
+        previous = cls._active_tooltip
+        cls._active_tooltip = None
+        if previous is not None:
+            try:
+                if previous.winfo_exists():
+                    previous._close()
+            except tkinter.TclError:
+                pass
 
-    def __init__(self, parent, card, images_enabled, scale):
+        tooltip = cls(parent, card, images_enabled, scale, persistent=persistent)
+        try:
+            if tooltip.winfo_exists():
+                cls._active_tooltip = tooltip
+        except tkinter.TclError:
+            pass
+        return tooltip
+
+    @classmethod
+    def dismiss_unpinned(cls):
+        """Close a dwell preview without disturbing a click-pinned preview."""
+        tooltip = cls._active_tooltip
+        if tooltip is not None and not getattr(tooltip, "_persistent", True):
+            tooltip._close()
+
+    def __init__(self, parent, card, images_enabled, scale, persistent=True):
         super().__init__(parent)
+        self._persistent = persistent
         self.parent = parent
-        self._leave_id = None
+        self._owner = None
+        self._owner_bind_after_id = None
+        self._owner_click_id = None
+        self._owner_escape_id = None
+        self._owner_destroy_id = None
+        self._image_results = queue.Queue()
+        self._image_poll_id = None
         try:
             self._build_ui(parent, card, images_enabled, scale)
         except Exception as e:
@@ -249,6 +276,12 @@ class CardToolTip(tkinter.Toplevel):
             self.withdraw()
             self.destroy()
             return
+
+        # Record the anchor before constructing image widgets. An in-memory
+        # cache hit applies the image synchronously and repositions the popup,
+        # so these coordinates must exist before ``_load_image_async`` runs.
+        self._mouse_x = parent.winfo_pointerx()
+        self._mouse_y = parent.winfo_pointery()
 
         self.transient(parent.winfo_toplevel())
         self.wm_overrideredirect(True)
@@ -272,6 +305,8 @@ class CardToolTip(tkinter.Toplevel):
         name = card.get("name", "Unknown")
         stats = card.get("deck_colors", {})
         urls = card.get("image", [])
+        if isinstance(urls, str):
+            urls = [urls]
         tags = card.get("tags", [])
         rarity = str(card.get("rarity") or "common").capitalize()
 
@@ -429,13 +464,17 @@ class CardToolTip(tkinter.Toplevel):
                 justify="left",
             ).pack(anchor="w")
 
-        # Anchor to the mouse position AT THE TIME OF CREATION
-        self._mouse_x = parent.winfo_pointerx()
-        self._mouse_y = parent.winfo_pointery()
+        # Reposition once more after every text/stat widget has been measured.
         self._reposition()
 
-        # Bind closing interactions securely
-        self._leave_id = self.parent.bind("<Leave>", self._on_parent_leave, add="+")
+        # A click preview should not disappear because macOS briefly reports a
+        # pointer-leave while focus/topmost windows are changing. Install the
+        # outside-click binding after the opening event has fully completed.
+        self._owner = parent.winfo_toplevel()
+        self._owner_destroy_id = self._owner.bind(
+            "<Destroy>", self._on_owner_destroy, add="+"
+        )
+        self._owner_bind_after_id = self.after_idle(self._bind_owner_close_actions)
         self.bind("<Button-1>", self._close)
 
         self.deiconify()  # Show the window instantly now that geometry is calculated
@@ -453,29 +492,64 @@ class CardToolTip(tkinter.Toplevel):
             self._reposition()
             self.lift()
 
-    def _on_parent_leave(self, event):
+    def _bind_owner_close_actions(self):
+        self._owner_bind_after_id = None
         try:
-            x, y = self.winfo_pointerx(), self.winfo_pointery()
-            rx, ry = self.parent.winfo_rootx(), self.parent.winfo_rooty()
-            rw, rh = self.parent.winfo_width(), self.parent.winfo_height()
-
-            if rx <= x <= rx + rw and ry <= y <= ry + rh:
+            if not self.winfo_exists() or self._owner is None:
                 return
-        except Exception:
-            pass
+            self._owner_click_id = self._owner.bind(
+                "<Button-1>", self._close, add="+"
+            )
+            self._owner_escape_id = self._owner.bind(
+                "<Escape>", self._close, add="+"
+            )
+        except tkinter.TclError:
+            return
 
-        self._close()
+    def _on_owner_destroy(self, event):
+        if event.widget is self._owner:
+            self._close()
 
     def _close(self, event=None):
-        if self._leave_id:
+        if self._owner_bind_after_id is not None:
             try:
-                self.parent.unbind("<Leave>", self._leave_id)
-            except Exception:
+                self.after_cancel(self._owner_bind_after_id)
+            except tkinter.TclError:
                 pass
-            self._leave_id = None
+            self._owner_bind_after_id = None
 
-        if self.winfo_exists():
-            self.destroy()
+        if self._image_poll_id is not None:
+            try:
+                self.after_cancel(self._image_poll_id)
+            except tkinter.TclError:
+                pass
+            self._image_poll_id = None
+
+        for sequence, binding_name in (
+            ("<Button-1>", "_owner_click_id"),
+            ("<Escape>", "_owner_escape_id"),
+            ("<Destroy>", "_owner_destroy_id"),
+        ):
+            binding_id = getattr(self, binding_name, None)
+            if binding_id and self._owner is not None:
+                try:
+                    self._owner.unbind(sequence, binding_id)
+                except (AttributeError, tkinter.TclError):
+                    pass
+                setattr(self, binding_name, None)
+
+        if CardToolTip._active_tooltip is self:
+            CardToolTip._active_tooltip = None
+
+        try:
+            exists = self.winfo_exists()
+        except tkinter.TclError:
+            exists = False
+        if exists:
+            try:
+                self.destroy()
+            except tkinter.TclError:
+                pass
 
     def _reposition(self):
         """Calculates bounds using the static initial mouse position so the tooltip doesn't teleport."""
@@ -524,20 +598,19 @@ class CardToolTip(tkinter.Toplevel):
 
         if cache_key in self._in_memory_images:
             # Memory Hit! Instant render.
-            self.after(0, lambda: self._apply_image(self._in_memory_images[cache_key]))
+            self._apply_image(self._in_memory_images[cache_key])
             return
 
+        # Only the Tk main thread polls this queue. Image workers must never
+        # call ``after`` or any other Tcl/Tk method directly.
+        self._image_poll_id = self.after(25, self._poll_image_results)
         self._image_executor.submit(self._fetch_and_apply_image, u, s, cache_key)
 
     def _fetch_and_apply_image(self, u, s, cache_key):
-        """Moved the core logic into a clean worker method"""
+        """Fetch and resize pixels in a worker without touching Tcl/Tk."""
         try:
             if not u:
-                if hasattr(self, "winfo_exists"):
-                    try:
-                        self.after(0, lambda: self._apply_error() if self.winfo_exists() else None)
-                    except RuntimeError:
-                        pass
+                self._image_results.put(("error", None))
                 return
             sn = cache_key + ".jpg"
             cp = os.path.join(self.IMAGE_CACHE_DIR, sn)
@@ -562,25 +635,32 @@ class CardToolTip(tkinter.Toplevel):
                 )
 
             CardToolTip._in_memory_images[cache_key] = im
+            self._image_results.put(("image", im))
+        except Exception:
+            self._image_results.put(("error", None))
 
-            # Safely route back to Tkinter Main Thread
-            if hasattr(self, "winfo_exists"):
-                try:
-                    self.after(
-                        0,
-                        lambda: self._apply_image(im) if self.winfo_exists() else None,
-                    )
-                except RuntimeError:
-                    pass
-        except Exception as e:
-            if hasattr(self, "winfo_exists"):
-                try:
-                    self.after(
-                        0,
-                        lambda: self._apply_error() if self.winfo_exists() else None,
-                    )
-                except RuntimeError:
-                    pass
+    def _poll_image_results(self):
+        """Apply completed image work from the Tk main event loop."""
+        self._image_poll_id = None
+        if not self.winfo_exists():
+            return
+
+        result = None
+        try:
+            while True:
+                result = self._image_results.get_nowait()
+        except queue.Empty:
+            pass
+
+        if result is not None:
+            kind, image = result
+            if kind == "image":
+                self._apply_image(image)
+            else:
+                self._apply_error()
+
+        if result is None and self.winfo_exists():
+            self._image_poll_id = self.after(25, self._poll_image_results)
 
     def _apply_image(self, im):
         if hasattr(self, "winfo_exists") and self.winfo_exists():
@@ -629,6 +709,13 @@ class ModernTreeview(ttk.Treeview):
         self._setup_headers(columns)
         self._setup_row_colors()
         self._setup_column_drag()
+
+        # Normalize macOS trackpad input and route wheel events even when the
+        # pointer is above a cell. The custom bindtag runs before Tk's native
+        # Treeview class binding, avoiding an extra native scroll step.
+        from src.utils import bind_scroll
+
+        bind_scroll(self, self.yview_scroll)
 
         self._pulse_step = 0
         self._last_picked_items = set()
@@ -1513,6 +1600,17 @@ class ScrolledFrame(tb.Frame):
             lambda e: self.canvas.itemconfig(self.window_id, height=e.height),
         )
 
+        # Card-pool children are created dynamically, so register both the
+        # canvas and its content frame with the shared descendant-aware router.
+        from src.utils import bind_scroll
+
+        bind_scroll(self.canvas, self.canvas.xview_scroll, horizontal=True)
+        bind_scroll(
+            self.scrollable_frame,
+            self.canvas.xview_scroll,
+            horizontal=True,
+        )
+
 
 class CardPile(tb.Frame):
     def __init__(self, parent, title, app_instance, **kwargs):
@@ -1596,7 +1694,36 @@ class CardPile(tb.Frame):
         )
         lb.pack(side=LEFT, fill=BOTH, expand=True)
 
+        hover_job = None
+
+        def _cancel_hover(e=None):
+            nonlocal hover_job
+            if hover_job is not None:
+                try:
+                    ch.after_cancel(hover_job)
+                except tkinter.TclError:
+                    pass
+                hover_job = None
+            CardToolTip.dismiss_unpinned()
+
+        def _show_hover():
+            nonlocal hover_job
+            hover_job = None
+            CardToolTip.create(
+                ch,
+                card_data,
+                self.app.configuration.features.images_enabled,
+                Theme.current_scale,
+                persistent=False,
+            )
+
+        def _schedule_hover(e=None):
+            nonlocal hover_job
+            _cancel_hover()
+            hover_job = ch.after(425, _show_hover)
+
         def _trigger_tooltip(e):
+            _cancel_hover()
             CardToolTip.create(
                 ch,  # Anchor safely to the row container
                 card_data,
@@ -1604,7 +1731,9 @@ class CardPile(tb.Frame):
                 Theme.current_scale,
             )
 
-        # Require an explicit click to view the tooltip to stop erratic hovering/flashing
-        ch.bind("<Button-1>", _trigger_tooltip)
-        cv.bind("<Button-1>", _trigger_tooltip)
-        lb.bind("<Button-1>", _trigger_tooltip)
+        # A short dwell avoids the flashing caused by immediate hover previews;
+        # clicking keeps the existing persistent/pinned behavior.
+        for widget in (ch, cv, lb):
+            widget.bind("<Enter>", _schedule_hover)
+            widget.bind("<Leave>", _cancel_hover)
+            widget.bind("<Button-1>", _trigger_tooltip)

@@ -1,0 +1,4 @@
+DETAILED LOGS: DISABLED
+[UnityCrossThreadLogger]Client.SceneChange {"fromSceneName":"EventLanding","toSceneName":"TableDraftQueue","initiator":"System","context":"Entering table draft queue: CubeDraft_Planar_Innistrad"}
+[UnityCrossThreadLogger]Draft.Notify {"draftId":"sanitized-draft","SelfPick":1,"SelfPack":1,"PackCards":"55531,99488,89190,89191,78637,98505,63377,78622,85478,90305,102584,86245,79248,67582,71095"}
+[UnityCrossThreadLogger]Draft.Notify {"draftId":"sanitized-draft","SelfPick":15,"SelfPack":3,"PackCards":"93760"}

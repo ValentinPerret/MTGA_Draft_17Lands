@@ -8,6 +8,7 @@ from typing import Callable
 from src.tier_list import TierList, TIER_FOLDER, TIER_FILE_PREFIX, TIER_URL_17LANDS
 from src.ui.styles import Theme
 from src.ui.components import DynamicTreeviewManager
+from src.ui.main_thread import MainThreadDispatcher
 
 
 class TierListWindow(ttk.Frame):
@@ -15,6 +16,7 @@ class TierListWindow(ttk.Frame):
         super().__init__(parent)
         self.configuration = configuration
         self.on_update_callback = on_update_callback
+        self.ui_dispatcher = MainThreadDispatcher(self)
         self.vars = {}
         self._import_thread = None
         self._build_ui()
@@ -166,14 +168,13 @@ class TierListWindow(ttk.Frame):
     def _run_import(self, url, label):
         try:
             new_tl = TierList.from_api(url)
-            if self.winfo_exists():
-                if new_tl:
-                    new_tl.meta.label = label
-                    filename = f"{TIER_FILE_PREFIX}_{new_tl.meta.set}_{int(datetime.now().timestamp())}.txt"
-                    new_tl.to_file(os.path.join(TIER_FOLDER, filename))
-                    self._safe_finalize()
-                else:
-                    self._safe_error("API Error")
+            if new_tl:
+                new_tl.meta.label = label
+                filename = f"{TIER_FILE_PREFIX}_{new_tl.meta.set}_{int(datetime.now().timestamp())}.txt"
+                new_tl.to_file(os.path.join(TIER_FOLDER, filename))
+                self._safe_finalize()
+            else:
+                self._safe_error("API Error")
         except Exception as e:
             self._safe_error(str(e))
 
@@ -185,10 +186,7 @@ class TierListWindow(ttk.Frame):
         if threading.current_thread() is threading.main_thread():
             callback()
         else:
-            try:
-                self.after(0, callback)
-            except RuntimeError:
-                pass  # Safely ignore during headless test execution
+            self.ui_dispatcher.post(callback)
 
     def _safe_error(self, err):
         def callback():
@@ -198,10 +196,7 @@ class TierListWindow(ttk.Frame):
         if threading.current_thread() is threading.main_thread():
             callback()
         else:
-            try:
-                self.after(0, callback)
-            except RuntimeError:
-                pass  # Safely ignore during headless test execution
+            self.ui_dispatcher.post(callback)
 
     def _finalize_import(self):
         self.btn_import.configure(state="normal")

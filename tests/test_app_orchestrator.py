@@ -110,14 +110,14 @@ class TestAppOrchestrator:
             app.top_bar.update_data_sources()
             app.top_bar.update_deck_filter_options()
 
-            mock_scanner.retrieve_set_data.reset_mock()
-
             # Simulate changing the event
-            app.vars["selected_event"].set("TradDraft")
+            with patch.object(
+                app.orchestrator, "request_dataset_load"
+            ) as mock_request_dataset:
+                app.vars["selected_event"].set("TradDraft")
 
-            # App should detect that traddraft.json != premier.json and retrieve it
-            assert mock_scanner.retrieve_set_data.called
-            mock_scanner.retrieve_set_data.assert_called_with("/mock/traddraft.json")
+            # Dataset parsing is queued instead of blocking Tk's event loop.
+            mock_request_dataset.assert_called_once_with("/mock/traddraft.json")
         finally:
             for p in ui_patches:
                 p.stop()

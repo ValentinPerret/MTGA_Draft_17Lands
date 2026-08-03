@@ -5,10 +5,13 @@ Iron-clad validation for the Dataset Manager.
 
 import pytest
 import tkinter
+import threading
+import os
 from unittest.mock import MagicMock, patch
 from src.ui.windows.download import DownloadWindow, DatasetArgs
 from src.limited_sets import SetInfo
 from src.ui.styles import Theme
+from src import constants
 
 
 class TestDownloadPanel:
@@ -70,6 +73,59 @@ class TestDownloadPanel:
         """A set with a real start date uses it directly."""
         panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
         assert panel._resolve_start_date("Outlaws") == "2024-04-16"
+
+    @patch("src.ui.windows.download.retrieve_local_set_list")
+    def test_downloaded_datasets_are_labeled_and_active_is_explicit(
+        self, mock_retrieve, root, mock_sets_data, config
+    ):
+        active_path = "/mock/OTJ_PremierDraft_All_Data.json"
+        other_path = "/mock/CUBE_PremierDraft_All_Data.json"
+        mock_retrieve.return_value = (
+            [
+                (
+                    "Outlaws",
+                    "PremierDraft",
+                    "All",
+                    "2024-04-16",
+                    "2024-05-01",
+                    1200,
+                    active_path,
+                    "2024-05-01",
+                ),
+                (
+                    "Cube",
+                    "PremierDraft",
+                    "All",
+                    "2023-12-01",
+                    "2024-01-01",
+                    800,
+                    other_path,
+                    "2024-01-01",
+                ),
+            ],
+            [],
+        )
+        config.card_data.latest_dataset = os.path.basename(active_path)
+
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+
+        assert panel.vars["dataset_count"].get() == "2 downloaded"
+        assert "Active dataset: Outlaws" in panel.vars["active_dataset"].get()
+        assert panel.table.item(active_path, "values")[0] == "Active"
+        assert panel.table.item(other_path, "values")[0] == "Available"
+
+        panel.table.selection_set(other_path)
+        panel._on_dataset_selection()
+        assert str(panel.btn_use_selected["state"]) == "normal"
+        assert str(panel.btn_delete_selected["state"]) == "normal"
+
+    @patch("src.ui.windows.download.open_file")
+    def test_open_download_folder_action(
+        self, mock_open, root, mock_sets_data, config
+    ):
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+        panel._open_dataset_folder()
+        mock_open.assert_called_once_with(constants.SETS_FOLDER)
 
     def test_resolve_start_date_manifest_fallback(self, root, config):
         """A set stuck on the placeholder date (e.g. stale set-list cache) falls
@@ -215,6 +271,25 @@ class TestDownloadPanel:
         assert str(panel.btn_dl["state"]) == "normal"
         assert panel.progress["value"] == 0
         assert panel.vars["status"].get() == "DOWNLOAD FAILED"
+        mock_err.assert_called_once_with("Download Error", "Network Timeout")
+
+    @patch("tkinter.messagebox.showerror")
+    def test_worker_error_is_queued_without_calling_tk(
+        self, mock_err, root, mock_sets_data, config
+    ):
+        """A background worker must never invoke Tk, including widget.after()."""
+        panel = DownloadWindow(root, mock_sets_data, config, MagicMock())
+        panel.after = MagicMock(side_effect=AssertionError("worker called Tk"))
+
+        worker = threading.Thread(target=panel._safe_error, args=("Network Timeout",))
+        worker.start()
+        worker.join()
+
+        panel.after.assert_not_called()
+        mock_err.assert_not_called()
+
+        panel._download_thread = None
+        panel._poll_download_events()
         mock_err.assert_called_once_with("Download Error", "Network Timeout")
 
     @patch("src.ui.windows.download.os.remove")

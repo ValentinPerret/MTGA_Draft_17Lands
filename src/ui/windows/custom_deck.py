@@ -30,6 +30,7 @@ from src.card_logic import (
 )
 from src.ui.styles import Theme
 from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.main_thread import MainThreadDispatcher
 from src.utils import bind_scroll
 
 
@@ -39,6 +40,7 @@ class CustomDeckPanel(ttk.Frame):
         self.draft = draft_manager
         self.configuration = configuration
         self.app_context = app_context
+        self.ui_dispatcher = MainThreadDispatcher(self)
 
         self.deck_list: List[Dict] = []
         self.sb_list: List[Dict] = []
@@ -437,38 +439,32 @@ class CustomDeckPanel(ttk.Frame):
     def _run_simulation(self):
         """Entry point for clicking the 'Analyze' button in the toolbar."""
         self.notebook.select(self.hand_tab)
-        self.sim_executor.submit(self._run_monte_carlo_task, self.deck_list)
+        self._show_sim_loading("Running 10,000 Monte Carlo simulations...")
+        deck_snapshot = [dict(card) for card in self.deck_list]
+        self.sim_executor.submit(self._run_monte_carlo_task, deck_snapshot)
 
     def _run_monte_carlo_task(self, deck_list):
         """Executes a Monte Carlo simulation in the background."""
-        self.after(
-            0,
-            lambda: self._show_sim_loading("Running 10,000 Monte Carlo Simulations..."),
-        )
         try:
             from src.card_logic import simulate_deck
 
             stats = simulate_deck(deck_list, iterations=10000)
-            self.after(0, lambda: self._show_sim_results(stats))
+            self.ui_dispatcher.post(self._show_sim_results, stats)
         except Exception as e:
-            self.after(0, lambda err=str(e): self._show_sim_error(err))
+            self.ui_dispatcher.post(self._show_sim_error, str(e))
 
     def _auto_optimize_deck(self):
         """Entry point for the AI Auto-Optimize button."""
-        self.sim_executor.submit(self._run_auto_optimize_task)
-
-    def _run_auto_optimize_task(self):
-        """Background task that brute-forces deck permutations to find the mathematically optimal build."""
-        self.after(
-            0,
-            lambda: self._show_sim_loading(
-                "AI Auto-Optimizing: Simulating thousands of deck permutations..."
-            ),
+        self._show_sim_loading(
+            "AI Auto-Optimizing: Simulating thousands of deck permutations..."
         )
-        try:
-            base_deck = list(self.deck_list)
-            base_sb = list(self.sb_list)
+        base_deck = [dict(card) for card in self.deck_list]
+        base_sb = [dict(card) for card in self.sb_list]
+        self.sim_executor.submit(self._run_auto_optimize_task, base_deck, base_sb)
 
+    def _run_auto_optimize_task(self, base_deck, base_sb):
+        """Brute-force deck permutations away from Tk's event thread."""
+        try:
             total_cards = sum(c.get("count", 1) for c in base_deck)
             if total_cards != 40:
                 raise Exception(
@@ -508,20 +504,21 @@ class CustomDeckPanel(ttk.Frame):
                     self._draw_sample_hand()
                     self._update_basics_toolbar()
 
-                self.after(0, finalize)
+                self.ui_dispatcher.post(finalize)
             else:
                 raise Exception("Failed to optimize.")
         except Exception as e:
+            error_text = str(e)
 
-            def show_err():
-                self._show_sim_error(str(e))
+            def show_err(err=error_text):
+                self._show_sim_error(err)
                 import tkinter.messagebox
 
                 tkinter.messagebox.showwarning(
-                    "Optimization Failed", str(e), parent=self
+                    "Optimization Failed", err, parent=self
                 )
 
-            self.after(0, show_err)
+            self.ui_dispatcher.post(show_err)
 
     def _show_sim_loading(self, msg="Running 10,000 Monte Carlo Simulations..."):
         for widget in self.sim_frame.winfo_children():
@@ -969,8 +966,7 @@ class CustomDeckPanel(ttk.Frame):
                     lbl.bind("<Enter>", lambda e: container_frame.lift())
                     lbl.bind("<Leave>", restore_z)
 
-            # Safely sync to main UI thread
-            self.after(0, apply_img)
+            self.ui_dispatcher.post(apply_img)
 
         except Exception:
             pass
@@ -1150,32 +1146,29 @@ class CustomDeckPanel(ttk.Frame):
     def _apply_auto_lands(self):
         """Dispatches the brute-force mana optimization to a background thread."""
         self.notebook.select(self.hand_tab)
-        self.sim_executor.submit(self._run_auto_lands_task)
+        self._show_sim_loading("Simulating mana-base permutations...")
+        deck_snapshot = [dict(card) for card in self.deck_list]
+        self.sim_executor.submit(self._run_auto_lands_task, deck_snapshot)
 
-    def _run_auto_lands_task(self):
-        self.after(
-            0,
-            lambda: self._show_sim_loading(
-                "Simulating perfect mana base permutations..."
-            ),
-        )
-
+    def _run_auto_lands_task(self, deck_snapshot=None):
+        if deck_snapshot is None:
+            deck_snapshot = [dict(card) for card in self.deck_list]
         try:
             from src.advisor.mana_base import brute_force_mana_base, get_strict_colors
 
             # Extract non-basics
-            spells = [c for c in self.deck_list if "Land" not in c.get("types", [])]
+            spells = [c for c in deck_snapshot if "Land" not in c.get("types", [])]
             non_basic_lands = [
                 c
-                for c in self.deck_list
+                for c in deck_snapshot
                 if "Land" in c.get("types", [])
                 and "Basic" not in c.get("types", [])
                 and c.get("name") not in constants.BASIC_LANDS
             ]
 
             if not spells:
-                self.after(
-                    0, lambda: self._show_sim_error("Add spells to the deck first.")
+                self.ui_dispatcher.post(
+                    self._show_sim_error, "Add spells to the deck first."
                 )
                 return
 
@@ -1221,12 +1214,16 @@ class CustomDeckPanel(ttk.Frame):
                 self._update_tables()
                 self._render_deck_stats()
                 self._update_basics_toolbar()
-                self._run_monte_carlo_task(self.deck_list)
+                self._show_sim_loading("Running 10,000 Monte Carlo simulations...")
+                optimized_snapshot = [dict(card) for card in self.deck_list]
+                self.sim_executor.submit(
+                    self._run_monte_carlo_task, optimized_snapshot
+                )
 
-            self.after(0, _finalize)
+            self.ui_dispatcher.post(_finalize)
 
         except Exception as e:
-            self.after(0, lambda err=str(e): self._show_sim_error(err))
+            self.ui_dispatcher.post(self._show_sim_error, str(e))
 
     def _add_specific_basic(self, color_name):
         color_map = {

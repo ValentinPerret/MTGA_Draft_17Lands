@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src import constants
 from src.configuration import Configuration
 from src.ui.styles import Theme
+from src.ui.main_thread import MainThreadDispatcher
 from src.ui.components import (
     DynamicTreeviewManager,
     ManaCurvePlot,
@@ -29,7 +30,7 @@ from src.ui.components import (
 )
 from src.card_logic import copy_deck, get_deck_metrics
 from src.sealed_logic import SealedSession, generate_sealed_shells
-from src.utils import open_file
+from src.utils import bind_scroll, open_file
 
 
 class SealedStudioWindow(tb.Toplevel):
@@ -44,6 +45,7 @@ class SealedStudioWindow(tb.Toplevel):
     ):
         super().__init__(parent)
         self.app_context = app_context
+        self.ui_dispatcher = MainThreadDispatcher(self)
         self.configuration = configuration
         self.metrics = metrics
 
@@ -588,32 +590,8 @@ class SealedStudioWindow(tb.Toplevel):
         self.pool_canvas.grid(row=0, column=0, sticky="nsew")
         self.pool_scroll.grid(row=1, column=0, sticky="ew")
 
-        # Cross-platform mouse wheel scrolling horizontally for canvases
-        def _bind_horizontal_scroll(canvas):
-            import sys
-
-            if sys.platform == "darwin":
-                canvas.bind(
-                    "<MouseWheel>",
-                    lambda e: canvas.xview_scroll(-1 * e.delta, "units"),
-                    add="+",
-                )
-            elif sys.platform == "win32":
-                canvas.bind(
-                    "<MouseWheel>",
-                    lambda e: canvas.xview_scroll(-1 * (int(e.delta) // 120), "units"),
-                    add="+",
-                )
-            else:
-                canvas.bind(
-                    "<Button-4>", lambda e: canvas.xview_scroll(-1, "units"), add="+"
-                )
-                canvas.bind(
-                    "<Button-5>", lambda e: canvas.xview_scroll(1, "units"), add="+"
-                )
-
-        _bind_horizontal_scroll(self.deck_canvas)
-        _bind_horizontal_scroll(self.pool_canvas)
+        bind_scroll(self.deck_canvas, self.deck_canvas.xview_scroll, horizontal=True)
+        bind_scroll(self.pool_canvas, self.pool_canvas.xview_scroll, horizontal=True)
 
         self._bind_canvas_dnd(self.pool_canvas, is_pool=True)
         self._bind_canvas_dnd(self.deck_canvas, is_pool=False)
@@ -1190,21 +1168,15 @@ class SealedStudioWindow(tb.Toplevel):
                         for t in canvas.find_withtag(overlay_tag):
                             canvas.tag_raise(t)
 
-                self.after(0, apply_img)
+                self.ui_dispatcher.post(apply_img)
             except Exception:
-                # Tell user image loading failed
-                if canvas.winfo_exists():
-                    try:
+                def apply_err():
+                    if canvas.winfo_exists():
+                        canvas.itemconfigure(
+                            text_id, text=f"{name}\n(Image Unavailable)"
+                        )
 
-                        def apply_err():
-                            if canvas.winfo_exists():
-                                canvas.itemconfigure(
-                                    text_id, text=f"{name}\n(Image Unavailable)"
-                                )
-
-                        self.after(0, apply_err)
-                    except RuntimeError:
-                        pass
+                self.ui_dispatcher.post(apply_err)
 
         self.image_executor.submit(fetch)
 
@@ -1626,8 +1598,8 @@ class SealedStudioWindow(tb.Toplevel):
                         parent=self,
                     )
 
-                self.after(0, _err)
+                self.ui_dispatcher.post(_err)
             finally:
-                self.after(0, self._refresh_data)
+                self.ui_dispatcher.post(self._refresh_data)
 
         threading.Thread(target=_api_call, daemon=True).start()

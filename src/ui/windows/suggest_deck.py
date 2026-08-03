@@ -9,6 +9,7 @@ Includes a 10,000 game Monte Carlo Simulation for elite pro-level analysis.
 import tkinter
 from tkinter import ttk
 from typing import Dict, Any, List
+import queue
 import random
 import requests
 import urllib.parse
@@ -21,8 +22,36 @@ from PIL import Image, ImageTk
 from src import constants
 from src.card_logic import copy_deck, get_strict_colors, is_castable, get_functional_cmc
 from src.ui.styles import Theme
-from src.ui.components import DynamicTreeviewManager, CardToolTip, AutoScrollbar
+from src.ui.components import (
+    DynamicTreeviewManager,
+    CardToolTip,
+    AutoScrollbar,
+    ScrolledFrame,
+    CardPile,
+)
+from src.ui.main_thread import MainThreadDispatcher
 from src.utils import bind_scroll
+
+
+def group_deck_by_cmc(deck_cards: List[Dict]) -> Dict[str, List[Dict]]:
+    """Group a stacked deck list into practical mana-curve columns."""
+    buckets = {key: [] for key in ("Lands", "1", "2", "3", "4", "5", "6+")}
+
+    for card in deck_cards:
+        if constants.CARD_TYPE_LAND in card.get(constants.DATA_FIELD_TYPES, []):
+            buckets["Lands"].append(card)
+            continue
+
+        cmc = get_functional_cmc(card)
+        if cmc <= 1:
+            key = "1"
+        elif cmc >= 6:
+            key = "6+"
+        else:
+            key = str(cmc)
+        buckets[key].append(card)
+
+    return buckets
 
 
 class SuggestDeckPanel(ttk.Frame):
@@ -39,16 +68,23 @@ class SuggestDeckPanel(ttk.Frame):
         self.configuration = configuration
         self.on_export_custom = on_export_custom
         self.app_context = app_context
+        self.ui_dispatcher = MainThreadDispatcher(self)
 
         self.suggestions: Dict[str, Any] = {}
         self.current_deck_list: List[Dict] = []
         self.current_sb_list: List[Dict] = []
         self.current_archetype_key: str = ""
+        self.deck_view_mode = "list"
 
         self.is_building = False
 
         self.image_executor = ThreadPoolExecutor(max_workers=4)
         self.sim_executor = ThreadPoolExecutor(max_workers=1)
+        self._builder_results = queue.Queue()
+        self._builder_poll_id = None
+        self._builder_generation = 0
+        self._last_build_signature = None
+        self._pending_build_refresh = False
         self.hand_images = []
         self.hand_frames = []
 
@@ -102,6 +138,16 @@ class SuggestDeckPanel(ttk.Frame):
         )
         self.btn_copy.pack(side="right", padx=Theme.scaled_val(5))
 
+        self.btn_visual_deck = ttk.Button(
+            self.arch_frame,
+            text="Visual Deck",
+            width=12,
+            bootstyle="info-outline",
+            command=self._toggle_deck_view,
+            state="disabled",
+        )
+        self.btn_visual_deck.pack(side="right", padx=Theme.scaled_val(5))
+
         if self.on_export_custom:
             self.btn_export_builder = ttk.Button(
                 self.arch_frame,
@@ -142,6 +188,18 @@ class SuggestDeckPanel(ttk.Frame):
             static_columns=cols,
         )
         self.table_manager.pack(fill="both", expand=True)
+
+        self.deck_visual_frame = ttk.Frame(self.deck_frame)
+        self.lbl_visual_summary = ttk.Label(
+            self.deck_visual_frame,
+            text="",
+            font=Theme.scaled_font(9),
+            bootstyle="secondary",
+            padding=Theme.scaled_val((8, 6)),
+        )
+        self.lbl_visual_summary.pack(fill="x")
+        self.deck_visual_scroller = ScrolledFrame(self.deck_visual_frame)
+        self.deck_visual_scroller.pack(fill="both", expand=True)
 
         # Sideboard Tab
         self.sb_frame = ttk.Frame(self.notebook, padding=Theme.scaled_val(2))
@@ -190,10 +248,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.stats_canvas, self.stats_canvas.yview_scroll)
         bind_scroll(self.stats_frame, self.stats_canvas.yview_scroll)
-        self.stats_frame.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.stats_frame, self.stats_canvas.yview_scroll),
-        )
 
         # --- SIMULATION & SAMPLE HAND TAB ---
         self.hand_tab = ttk.Frame(self.notebook, padding=Theme.scaled_val(15))
@@ -252,10 +306,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.hand_canvas, self.hand_canvas.yview_scroll)
         bind_scroll(self.hand_container, self.hand_canvas.yview_scroll)
-        self.hand_container.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.hand_container, self.hand_canvas.yview_scroll),
-        )
 
         # Right Column: Scrollable Monte Carlo Simulation
         self.sim_outer_frame = ttk.Labelframe(
@@ -302,10 +352,6 @@ class SuggestDeckPanel(ttk.Frame):
 
         bind_scroll(self.sim_canvas, self.sim_canvas.yview_scroll)
         bind_scroll(self.sim_frame, self.sim_canvas.yview_scroll)
-        self.sim_frame.bind(
-            "<Enter>",
-            lambda e: bind_scroll(self.sim_frame, self.sim_canvas.yview_scroll),
-        )
 
         self.sim_label = ttk.Label(
             self.sim_frame,
@@ -345,6 +391,15 @@ class SuggestDeckPanel(ttk.Frame):
         self.current_deck_list = []
         self.current_sb_list = []
 
+        visual_scroller = getattr(self, "deck_visual_scroller", None)
+        if visual_scroller and visual_scroller.winfo_exists():
+            for widget in visual_scroller.scrollable_frame.winfo_children():
+                widget.destroy()
+
+        visual_button = getattr(self, "btn_visual_deck", None)
+        if visual_button and visual_button.winfo_exists():
+            visual_button.configure(state="disabled")
+
         notebook = getattr(self, "notebook", None)
         deck_frame = getattr(self, "deck_frame", None)
         if notebook and deck_frame:
@@ -359,15 +414,83 @@ class SuggestDeckPanel(ttk.Frame):
             # Automatically draw a fresh hand when viewing the tab to ensure it's always responsive
             self._draw_sample_hand()
 
+    def _toggle_deck_view(self):
+        """Switch the recommended main deck between list and mana-curve views."""
+        if not self.current_deck_list:
+            return
+
+        self.notebook.select(self.deck_frame)
+        if self.deck_view_mode == "list":
+            self.deck_view_mode = "visual"
+            self.table_manager.pack_forget()
+            self.deck_visual_frame.pack(fill="both", expand=True)
+            self.btn_visual_deck.configure(text="List Deck")
+            self._render_visual_deck()
+        else:
+            self.deck_view_mode = "list"
+            self.deck_visual_frame.pack_forget()
+            self.table_manager.pack(fill="both", expand=True)
+            self.btn_visual_deck.configure(text="Visual Deck")
+
+    def _render_visual_deck(self):
+        """Render the current recommendation as horizontally scrollable CMC piles."""
+        scroller = getattr(self, "deck_visual_scroller", None)
+        if not scroller or not scroller.winfo_exists():
+            return
+
+        for widget in scroller.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        buckets = group_deck_by_cmc(self.current_deck_list)
+        total_cards = sum(int(card.get("count", 1)) for card in self.current_deck_list)
+        land_cards = sum(
+            int(card.get("count", 1)) for card in buckets["Lands"]
+        )
+        self.lbl_visual_summary.configure(
+            text=(
+                f"{total_cards} cards  •  {total_cards - land_cards} spells  •  "
+                f"{land_cards} lands  •  Grouped by practical casting cost"
+            )
+        )
+
+        for key in ("Lands", "1", "2", "3", "4", "5", "6+"):
+            card_list = buckets[key]
+            card_count = sum(int(card.get("count", 1)) for card in card_list)
+            title = (
+                f"LANDS · {card_count}"
+                if key == "Lands"
+                else f"CMC {key} · {card_count}"
+            )
+
+            pile_frame = ttk.Frame(scroller.scrollable_frame)
+            pile_frame.pack(
+                side="left",
+                fill="y",
+                padx=Theme.scaled_val(4),
+                pady=Theme.scaled_val(5),
+                anchor="n",
+            )
+            pile = CardPile(pile_frame, title=title, app_instance=self)
+            pile.pack(fill="both", expand=True)
+
+            for card in sorted(
+                card_list,
+                key=lambda value: (
+                    value.get(constants.DATA_FIELD_COLORS, []),
+                    value.get(constants.DATA_FIELD_NAME, ""),
+                ),
+            ):
+                pile.add_card(card)
+
     def _run_monte_carlo_task(self, deck_list):
-        self.after(0, lambda: self._show_sim_loading())
+        self.ui_dispatcher.post(self._show_sim_loading)
         try:
             from src.card_logic import simulate_deck
 
             stats = simulate_deck(deck_list, iterations=10000)
-            self.after(0, lambda: self._show_sim_results(stats))
+            self.ui_dispatcher.post(self._show_sim_results, stats)
         except Exception as e:
-            self.after(0, lambda e=e: self._show_sim_error(str(e)))
+            self.ui_dispatcher.post(self._show_sim_error, str(e))
 
     def _show_sim_loading(self, msg="Running 10,000 Monte Carlo Simulations..."):
         sim_frame = getattr(self, "sim_frame", None)
@@ -824,32 +947,25 @@ class SuggestDeckPanel(ttk.Frame):
 
                     lbl.configure(cursor="hand2")
 
-            # Safely sync to main UI thread
-            self.after(0, apply_img)
+            self.ui_dispatcher.post(apply_img)
 
         except Exception:
-            # Tell user image loading failed
-            if container_frame.winfo_exists():
-                try:
+            def apply_err():
+                if container_frame.winfo_exists():
+                    for w in container_frame.winfo_children():
+                        w.destroy()
+                    import ttkbootstrap as ttk
+                    from src.ui.styles import Theme
 
-                    def apply_err():
-                        if container_frame.winfo_exists():
-                            for w in container_frame.winfo_children():
-                                w.destroy()
-                            import ttkbootstrap as ttk
-                            from src.ui.styles import Theme
+                    ttk.Label(
+                        container_frame,
+                        text="Image\nUnavailable",
+                        bootstyle="danger",
+                        justify="center",
+                        font=Theme.scaled_font(9),
+                    ).pack(expand=True)
 
-                            ttk.Label(
-                                container_frame,
-                                text="Image\nUnavailable",
-                                bootstyle="danger",
-                                justify="center",
-                                font=Theme.scaled_font(9),
-                            ).pack(expand=True)
-
-                    self.after(0, apply_err)
-                except RuntimeError:
-                    pass
+            self.ui_dispatcher.post(apply_err)
 
     def _on_theme_change(self, event=None):
         stats_canvas = getattr(self, "stats_canvas", None)
@@ -863,11 +979,37 @@ class SuggestDeckPanel(ttk.Frame):
     def _calculate_suggestions(self):
         raw_pool = self.draft.retrieve_taken_cards()
 
+        pool_signature = tuple(
+            sorted(
+                f"{card.get('id') or card.get('name') or ''}:{card.get('count', 1)}"
+                for card in (raw_pool or [])
+            )
+        )
+        dataset_name = self.configuration.card_data.latest_dataset
+        try:
+            dataset_version = (
+                dataset_name,
+                os.path.getmtime(os.path.join(constants.SETS_FOLDER, dataset_name)),
+            )
+        except (OSError, TypeError):
+            dataset_version = (dataset_name, None)
+        build_signature = (
+            pool_signature,
+            dataset_version,
+            self.configuration.settings.deck_filter,
+        )
+        if build_signature == self._last_build_signature:
+            return
+        if self.is_building:
+            self._pending_build_refresh = True
+            return
+
         playable_spells = [
             c for c in (raw_pool or []) if "Land" not in c.get("types", [])
         ]
 
         if not playable_spells or len(playable_spells) < 22:
+            self._last_build_signature = build_signature
             msg = (
                 f"Not enough spells drafted yet (Have {len(playable_spells)}, Need 22)."
             )
@@ -879,10 +1021,10 @@ class SuggestDeckPanel(ttk.Frame):
                 self.app_context.loading_overlay.hide()
             return
 
-        if self.is_building:
-            return
-
         self.is_building = True
+        self._last_build_signature = build_signature
+        self._builder_generation += 1
+        builder_generation = self._builder_generation
         self.var_archetype.set("Initializing AI Builder...")
         self._update_dropdown_options(["Initializing AI Builder..."])
         self._clear_table()
@@ -899,36 +1041,10 @@ class SuggestDeckPanel(ttk.Frame):
             if hasattr(self, "orchestrator")
             else self.draft.retrieve_current_limited_event()
         )
-        dataset_name = self.configuration.card_data.latest_dataset
-
         def _progress_cb(msg):
-            if not self.winfo_exists():
-                return
-            if "status" in msg:
-                if not self.suggestions:
-                    self.after(0, lambda: self.var_archetype.set(msg["status"]))
-                if getattr(self, "app_context", None) and hasattr(
-                    self.app_context, "loading_overlay"
-                ):
-                    self.after(
-                        0,
-                        lambda: self.app_context.loading_overlay.update_status(
-                            msg["status"]
-                        ),
-                    )
-            elif "variant_label" in msg:
-                lbl = msg["variant_label"]
-                vd = msg["variant_data"]
-
-                def _update_ui():
-                    self.suggestions[lbl] = vd
-                    self.incremental_labels.append(lbl)
-                    self._update_dropdown_options(self.incremental_labels)
-
-                    if len(self.incremental_labels) == 1:
-                        self._on_deck_selection_change(lbl)
-
-                self.after(0, _update_ui)
+            # This callback runs inside the builder worker. Tk calls made from
+            # here can deadlock on macOS, so only pass plain data to the UI thread.
+            self._builder_results.put((builder_generation, "progress", msg))
 
         def _worker():
             try:
@@ -942,11 +1058,66 @@ class SuggestDeckPanel(ttk.Frame):
                     _progress_cb,
                     dataset_name,
                 )
-                self.after(0, lambda: self._finalize_build(raw_results))
-            except Exception as e:
-                self.after(0, lambda: self._handle_builder_error(str(e)))
+                self._builder_results.put(
+                    (builder_generation, "complete", raw_results)
+                )
+            except Exception as error:
+                self._builder_results.put(
+                    (builder_generation, "error", str(error))
+                )
 
+        self._schedule_builder_poll()
         self.sim_executor.submit(_worker)
+
+    def _schedule_builder_poll(self):
+        """Schedule the sole main-thread consumer for builder worker events."""
+        if self._builder_poll_id is None:
+            self._builder_poll_id = self.after_idle(self._poll_builder_results)
+
+    def _poll_builder_results(self):
+        """Apply queued builder progress and results on Tk's main thread."""
+        self._builder_poll_id = None
+
+        if not self.winfo_exists():
+            return
+
+        while True:
+            try:
+                generation, event_type, payload = self._builder_results.get_nowait()
+            except queue.Empty:
+                break
+
+            if generation != self._builder_generation:
+                continue
+
+            if event_type == "progress":
+                self._apply_builder_progress(payload)
+            elif event_type == "complete":
+                self._finalize_build(payload)
+            elif event_type == "error":
+                self._handle_builder_error(payload)
+
+        if self.is_building:
+            self._builder_poll_id = self.after(50, self._poll_builder_results)
+
+    def _apply_builder_progress(self, msg):
+        """Render one builder progress event; always called by the Tk thread."""
+        if "status" in msg:
+            if not self.suggestions:
+                self.var_archetype.set(msg["status"])
+            if getattr(self, "app_context", None) and hasattr(
+                self.app_context, "loading_overlay"
+            ):
+                self.app_context.loading_overlay.update_status(msg["status"])
+        elif "variant_label" in msg:
+            label = msg["variant_label"]
+            variant_data = msg["variant_data"]
+            self.suggestions[label] = variant_data
+            self.incremental_labels.append(label)
+            self._update_dropdown_options(self.incremental_labels)
+
+            if len(self.incremental_labels) == 1:
+                self._on_deck_selection_change(label)
 
     def _finalize_build(self, sorted_decks):
         self.is_building = False
@@ -961,6 +1132,7 @@ class SuggestDeckPanel(ttk.Frame):
             self._update_dropdown_options([msg])
             self.var_archetype.set(msg)
             self._clear_table()
+            self._start_pending_build_if_needed()
             return
 
         self.suggestions = sorted_decks
@@ -969,9 +1141,11 @@ class SuggestDeckPanel(ttk.Frame):
 
         # Always snap to the mathematically strongest deck once analysis completes
         self._on_deck_selection_change(dropdown_labels[0])
+        self._start_pending_build_if_needed()
 
     def _handle_builder_error(self, error_msg):
         self.is_building = False
+        self._last_build_signature = None
         if getattr(self, "app_context", None) and hasattr(
             self.app_context, "loading_overlay"
         ):
@@ -985,6 +1159,12 @@ class SuggestDeckPanel(ttk.Frame):
         import logging
 
         logging.getLogger(__name__).error(f"Suggest Deck Error: {error_msg}")
+        self._start_pending_build_if_needed()
+
+    def _start_pending_build_if_needed(self):
+        if self._pending_build_refresh:
+            self._pending_build_refresh = False
+            self.after_idle(self._calculate_suggestions)
 
     def _update_dropdown_options(self, options: List[str]):
         menu = self.om_archetype["menu"]
@@ -1102,6 +1282,9 @@ class SuggestDeckPanel(ttk.Frame):
             populate_tree(self.table_manager, self.current_deck_list, False)
         if sb_table:
             populate_tree(self.sb_manager, self.current_sb_list, True)
+
+        if self.deck_view_mode == "visual":
+            self._render_visual_deck()
 
     def _render_deck_stats(self):
         stats_frame = getattr(self, "stats_frame", None)
@@ -1271,6 +1454,9 @@ class SuggestDeckPanel(ttk.Frame):
         self.current_deck_list.sort(key=card_sort_key)
         self.current_sb_list.sort(key=card_sort_key)
 
+        if self.current_deck_list:
+            self.btn_visual_deck.configure(state="normal")
+
         breakdown = data.get("breakdown", "")
         if hasattr(self, "lbl_deck_notes") and self.lbl_deck_notes.winfo_exists():
             self.lbl_deck_notes.config(text=breakdown)
@@ -1317,7 +1503,16 @@ class SuggestDeckPanel(ttk.Frame):
             if region not in ("tree", "cell"):
                 return
 
-        selection = tree.selection()
+        clicked_row = (
+            tree.identify_row(event.y)
+            if hasattr(event, "y") and hasattr(tree, "identify_row")
+            else ""
+        )
+        if clicked_row:
+            tree.selection_set(clicked_row)
+            selection = [clicked_row]
+        else:
+            selection = tree.selection()
         if not selection:
             return
 

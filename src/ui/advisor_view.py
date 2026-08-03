@@ -63,6 +63,75 @@ class AdvisorPanel(tb.Frame):
         # Show top 5 in Mini Mode or Sidebar
         limit = 5 if self.mini_mode else 3
 
+        top = recs[0]
+        if top.engine == "contextual_v2":
+            summary = tb.Frame(self.container)
+            summary.pack(
+                fill="x",
+                padx=Theme.scaled_val(20),
+                pady=Theme.scaled_val((2, 14)),
+            )
+            tb.Label(
+                summary,
+                text=f"TAKE: {top.card_name}",
+                font=Theme.scaled_font(14 if self.mini_mode else 12, "bold"),
+                bootstyle="success" if top.is_elite else "primary",
+                wraplength=Theme.scaled_val(260 if self.mini_mode else 220),
+                justify="left",
+            ).pack(anchor="w")
+            lane_text = ", ".join(
+                f"{name} {probability:.0%}"
+                for name, probability in list(top.lane_probabilities.items())[:3]
+            )
+            tb.Label(
+                summary,
+                text=(
+                    f"Confidence: {top.confidence:.0%}\n"
+                    f"Lanes: {lane_text or 'uncertain'}\n"
+                    + (
+                        "Reviewed by local Codex"
+                        if top.model_assisted
+                        else "Local deterministic recommendation"
+                    )
+                ),
+                font=Theme.scaled_font(10 if self.mini_mode else 9),
+                justify="left",
+            ).pack(anchor="w", pady=Theme.scaled_val((3, 0)))
+            if top.data_caveats:
+                tb.Label(
+                    summary,
+                    text=f"⚠ {top.data_caveats[0]}",
+                    font=Theme.scaled_font(9 if self.mini_mode else 8),
+                    bootstyle="warning",
+                    wraplength=Theme.scaled_val(260 if self.mini_mode else 220),
+                    justify="left",
+                ).pack(anchor="w", pady=Theme.scaled_val((3, 0)))
+            details = tb.Frame(summary)
+            detail_lines = [
+                "Score: "
+                + " · ".join(
+                    f"{name.replace('_', ' ')} {value:+.1f}"
+                    for name, value in top.score_components.items()
+                )
+            ]
+            if top.future_considerations:
+                detail_lines.append("Next: " + " · ".join(top.future_considerations))
+            if top.data_caveats:
+                detail_lines.append("Data: " + " · ".join(top.data_caveats[:3]))
+            tb.Label(
+                details,
+                text="\n".join(detail_lines),
+                font=Theme.scaled_font(9 if self.mini_mode else 8),
+                wraplength=Theme.scaled_val(260 if self.mini_mode else 220),
+                justify="left",
+            ).pack(anchor="w")
+            tb.Button(
+                summary,
+                text="Score breakdown",
+                bootstyle="link",
+                command=lambda frame=details: self._toggle_details(frame),
+            ).pack(anchor="w", pady=Theme.scaled_val((2, 0)))
+
         # Font Scaling
         name_font_size = 14 if self.mini_mode else 12
         reason_font_size = 11 if self.mini_mode else 9
@@ -157,6 +226,16 @@ class AdvisorPanel(tb.Frame):
                 tag_strings = [TAG_VISUALS.get(t, t.capitalize()) for t in rec.tags]
                 reason_text += f"\n{', '.join(tag_strings)}"
 
+            if rec.engine == "contextual_v2":
+                deck_status = (
+                    "Makes projected deck"
+                    if rec.expected_to_make_deck
+                    else "Speculative / sideboard risk"
+                )
+                if rec.replacement_card:
+                    deck_status += f" · replaces {rec.replacement_card}"
+                reason_text += f"\n{rec.confidence:.0%} confidence · {deck_status}"
+
             lbl_reason = tb.Label(
                 content_frame,
                 text=reason_text,
@@ -187,3 +266,9 @@ class AdvisorPanel(tb.Frame):
     def _on_theme_change(self, event=None):
         if self.winfo_exists():
             self.update_recommendations(self.last_recs)
+
+    def _toggle_details(self, frame):
+        if frame.winfo_manager():
+            frame.pack_forget()
+        else:
+            frame.pack(fill="x", anchor="w", pady=Theme.scaled_val((2, 0)))

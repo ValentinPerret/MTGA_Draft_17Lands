@@ -37,7 +37,7 @@ class TestAppLayoutManager:
         assert layout.dashboard is not None
 
         # Verify panels are injected into the notebook
-        assert len(layout.notebook.tabs()) == 6
+        assert len(layout.notebook.tabs()) == 7
 
     def test_toggle_tabs_visibility(self, mock_app):
         """Verify that clicking 'Hide Tabs' collapses the lower pane correctly."""
@@ -49,12 +49,12 @@ class TestAppLayoutManager:
         # Hide tabs
         layout.toggle_tabs()
         assert layout.tabs_visible is False
-        assert "Show Tabs" in layout.btn_toggle_tabs.cget("text")
+        assert "Show tools" in layout.btn_toggle_tabs.cget("text")
 
         # Show tabs again
         layout.toggle_tabs()
         assert layout.tabs_visible is True
-        assert "Hide Tabs" in layout.btn_toggle_tabs.cget("text")
+        assert "Hide tools" in layout.btn_toggle_tabs.cget("text")
 
     def test_ensure_tabs_visible(self, mock_app):
         """Verify the defensive method guarantees tabs are shown."""
@@ -115,3 +115,29 @@ class TestAppLayoutManager:
         # Test handling of missing data
         layout.update_session_info(None, None, None)
         assert layout.lbl_session_info.cget("text") == ""
+
+    def test_refresh_active_panel_does_not_rebuild_hidden_tools(self, mock_app):
+        layout = AppLayoutManager(mock_app)
+        layout.build()
+        panels = [
+            layout.panel_data,
+            layout.panel_taken,
+            layout.panel_suggest,
+            layout.panel_custom,
+            layout.panel_compare,
+            layout.panel_game_review,
+            layout.panel_tiers,
+        ]
+        for panel in panels:
+            panel.refresh = MagicMock()
+
+        layout.notebook.select(layout.panel_suggest)
+        mock_app.root.update()
+        for panel in panels:
+            panel.refresh.reset_mock()
+
+        assert layout.refresh_active_panel() is True
+        layout.panel_suggest.refresh.assert_called_once()
+        for panel in panels:
+            if panel is not layout.panel_suggest:
+                panel.refresh.assert_not_called()
